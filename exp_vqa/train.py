@@ -25,7 +25,6 @@ def train(args):
     logging.info("Create train_loader and val_loader.........")
     train_loader_kwargs = {
         'question_pt': args.train_question_pt,
-        'scene_pt': args.train_scene_pt,
         'vocab_json': args.vocab_json,
         'feature_h5': args.feature_h5,
         'batch_size': args.batch_size,
@@ -35,7 +34,6 @@ def train(args):
     }
     val_loader_kwargs = {
         'question_pt': args.val_question_pt,
-        'scene_pt': args.val_scene_pt,
         'vocab_json': args.vocab_json,
         'feature_h5': args.feature_h5,
         'batch_size': args.batch_size,
@@ -59,6 +57,7 @@ def train(args):
         'dropout_prob': args.dropout,
         'device': device,
         'cls_fc_dim': args.cls_fc_dim,
+        'k_desc': args.k_desc,
         'program_scheme': ['find', 'relate', 'describe'],
     }
     model_kwargs_tosave = { k:v for k,v in model_kwargs.items() if k != 'vocab' }
@@ -85,9 +84,9 @@ def train(args):
         for i, batch in enumerate(train_loader):
             iter_count += 1
             progress = epoch+i/len(train_loader)
-            coco_ids, answers, *params = [todevice(x, device) for x in batch]
+            coco_ids, answers, *batch_input = [todevice(x, device) for x in batch]
             # questions, questions_len, conn_matrixes, cat_matrixes, vertex_indexes, edge_indexes, vision_feat
-            logits, others = model(*params)
+            logits, others = model(*batch_input)
             ##################### loss #####################
             nll = -nn.functional.log_softmax(logits, dim=1)
             ce_loss = (nll * answers / 10).sum(dim=1).mean()
@@ -124,7 +123,7 @@ def save_checkpoint(epoch, model, optimizer, model_kwargs, filename):
     state = {
         'epoch': epoch,
         'state_dict': model.state_dict(),
-        'optimizer': optimizer.state_dict()
+        'optimizer': optimizer.state_dict(),
         'model_kwargs': model_kwargs,
         }
     torch.save(state, filename)
@@ -134,16 +133,14 @@ def save_checkpoint(epoch, model, optimizer, model_kwargs, filename):
 def main():
     parser = argparse.ArgumentParser()
     # input and output
-    parser.add_argument('--input_dir', default='/data/sjx/VQA-Exp/data')
-    parser.add_argument('--data_type', choices=['coco', 'vg'])
-    #parser.add_argument('--input_dir', default='/data1/jiaxin/exp/vqa/data')
+    parser.add_argument('--save_dir', type=str, required=True, help='path to save checkpoints and logs')
+    #parser.add_argument('--input_dir', default='/data/sjx/VQA-Exp/data')
+    parser.add_argument('--input_dir', default='/data1/jiaxin/exp/vqa/data')
+    parser.add_argument('--data_type', default='coco', choices=['coco', 'vg'])
     parser.add_argument('--train_question_pt', default='train_questions.pt')
-    parser.add_argument('--train_scene_pt', default='train_sg.pt')
     parser.add_argument('--val_question_pt', default='val_questions.pt')
-    parser.add_argument('--val_scene_pt', default='val_sg.pt')
     parser.add_argument('--vocab_json', default='vocab.json')
     parser.add_argument('--feature_h5', default='trainval_feature.h5')
-    parser.add_argument('--save_dir', type=str, required=True, help='path to save checkpoints and logs')
     # training parameters
     parser.add_argument('--lr', default=1.5e-3, type=float)
     parser.add_argument('--lr_halflife', default=50000, type=int)
@@ -158,9 +155,10 @@ def main():
     # model hyperparameters
     parser.add_argument('--dim_hidden', default=1024, type=int, help='hidden state of seq2seq parser')
     parser.add_argument('--dim_word', default=300, type=int, help='dim of word/node/attribute/edge embedding')
-    parser.add_argument('--dim_v', default=1024, type=int, help='dim of word/node/attribute/edge embedding')
+    parser.add_argument('--dim_v', default=512, type=int, help='dim of word/node/attribute/edge embedding')
     parser.add_argument('--dim_vision', default=2048, type=int)
     parser.add_argument('--cls_fc_dim', default=1024, type=int)
+    parser.add_argument('--k_desc', default=16, type=int)
     parser.add_argument('--class_mode', default='qvc', choices=['qvc', 'qv', 'c'])
     parser.add_argument('--dropout', default=0.5, type=float)
     args = parser.parse_args()
@@ -177,10 +175,8 @@ def main():
         logging.info(k+':'+str(v))
     # concat obsolute path of input files
     args.train_question_pt = os.path.join(args.input_dir, args.data_type+'_'+args.train_question_pt)
-    args.train_scene_pt = os.path.join(args.input_dir, args.data_type+'_'+args.train_scene_pt)
     args.vocab_json = os.path.join(args.input_dir, args.data_type+'_'+args.vocab_json)
     args.val_question_pt = os.path.join(args.input_dir, args.data_type+'_'+args.val_question_pt)
-    args.val_scene_pt = os.path.join(args.input_dir, args.data_type+'_'+args.val_scene_pt)
     args.feature_h5 = os.path.join(args.input_dir, args.feature_h5)
     # set random seed
     torch.manual_seed(args.seed)

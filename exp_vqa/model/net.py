@@ -31,7 +31,7 @@ class XNMNet(nn.Module):
 
         
         self.num_classes = len(self.vocab['answer_token_to_idx'])
-        glimpses = 2 # emmmmm
+        glimpses = 2
         self.classifier = Classifier(
             in_features=(glimpses * self.dim_vision, self.dim_hidden),
             mid_features=self.cls_fc_dim,
@@ -52,6 +52,16 @@ class XNMNet(nn.Module):
                 nn.Linear(self.dim_word, self.dim_v),
                 nn.ReLU(),
                 )
+        self.map_vision_to_v = nn.Sequential(
+                nn.Linear(self.dim_vision, self.dim_v),
+                nn.Tanh(),
+                )
+        self.map_two_edge_to_v = nn.Sequential(
+                nn.Linear(self.dim_v * 2, 1024),
+                nn.ReLU(),
+                nn.Linear(1024, self.dim_v),
+                nn.Tanh(),
+                )
         # question+attribute+relation tokens. 0 for <NULL>
         self.num_token = len(self.vocab['question_token_to_idx'])
         self.token_embedding = nn.Embedding(self.num_token, self.dim_word)
@@ -61,14 +71,11 @@ class XNMNet(nn.Module):
         self.function_modules = {}
         for module_name in {'find', 'describe', 'relate'}:
             if module_name == 'find':
-                if 'relate' in self.program_scheme:
-                    module = modules.SimpleFind2Module(self.dim_v)
-                else:
-                    module = modules.SimpleFindModule(self.dim_v)
+                module = modules.FindModule(**kwargs)
             elif module_name == 'relate':
-                module = modules.SimpleRelateModule(self.dim_v)
+                module = modules.RelateModule(**kwargs)
             elif module_name == 'describe':
-                module = modules.SimpleDescribeModule(self.dim_v)
+                module = modules.DescribeModule(**kwargs)
 
             self.function_modules[module_name] = module
             self.add_module(module_name, module)
@@ -92,17 +99,13 @@ class XNMNet(nn.Module):
         nn.init.normal_(self.token_embedding.weight, mean=0, std=1/np.sqrt(self.dim_word))
 
 
-    def forward(self, questions, questions_len, conn_matrixes, cat_matrixes, v_indexes, e_indexes, vision_feat):
+    def forward(self, questions, questions_len, vision_feat):
         """
         Args:
-            conn_matrixes [list of Tensor or None]
-            cat_matrixes [list of Tensor]
-            v_indexes [list of Tensor], each Tensor is (num_node, ) : node index of each graph
-            e_indexes [list of Tensor]
             questions [Tensor] (batch_size, seq_len)
             questions_len [Tensor] (batch_size)
         """
-        batch_size = len(v_indexes)
+        batch_size = len(questions)
         questions = questions.permute(1, 0) # (seq_len, batch_size)
         gt_programs = torch.zeros(batch_size, len(self.program_scheme)+1).to(self.device)
         for i, m in enumerate(self.program_scheme):
@@ -110,37 +113,38 @@ class XNMNet(nn.Module):
         self.token_embedding.weight[0].data.zero_()
         questions_embedding = self.token_embedding(questions) # (seq_len, batch_size, dim_word)
         questions_embedding = torch.tanh(self.dropout(questions_embedding))
+        feat_inputs = self.map_vision_to_v(vision_feat.permute(0,2,1))
 
         module_outputs = []
         for n in range(batch_size):
-            if e_indexes[n] is None:
-                output = torch.zeros(self.dim_v).to(self.device)
-            else:
-                edge_cat_vectors = self.map_word_to_v(self.token_embedding(e_indexes[n])) # (num_current_edge, dim_v)
-                feat_input = self.map_word_to_v(self.token_embedding(v_indexes[n]))
-                output = None
-                for i in range(len(gt_programs[n])): # NOTE: programs are reverted pre-order
-                    module_type = self.vocab['program_idx_to_token'][gt_programs[n, i].item()]
-                    if module_type in {'<eos>'}: # quit 
-                        break
-                    #### module input
-                    question_logit = self.att_func_list[i](questions_embedding[:,n,:]).squeeze()
-                    mask = np.ones(question_logit.size(0))
-                    mask[0:questions_len[n]] = 0
-                    mask_tensor = torch.ByteTensor(mask).to(self.device)
-                    question_logit.data.masked_fill_(mask_tensor, -float('inf'))
-                    question_att = nn.functional.softmax(question_logit, dim=0) #(seq_len, )
-                    query = torch.matmul(question_att, questions_embedding[:,n,:]) #(dim_word, )
-                    query = self.map_word_to_v(query) #(dim_v, )
-                    ####
+            feat_input = feat_inputs[n]
+            num_node = len(feat_input)
+            feat_input_expand_0 = feat_input.unsqueeze(0).expand(num_node, num_node, self.dim_v)
+            feat_input_expand_1 = feat_input.unsqueeze(1).expand(num_node, num_node, self.dim_v)
+            feat_edge = torch.cat([feat_input_expand_0, feat_input_expand_1], dim=2) # (num_node, num_node, 2*dim_v)
+            feat_edge = self.map_two_edge_to_v(feat_edge)
 
-                    module = self.function_modules[module_type]
-                    if module_type == 'describe':
-                        output = module(output, query, feat_input)
-                    elif module_type == 'find':
-                        output = module(conn_matrixes[n], feat_input, query)
-                    elif module_type == 'relate':
-                        output = module(output, cat_matrixes[n], edge_cat_vectors, query)
+            output = torch.ones(num_node).to(self.device)
+            for i in range(len(gt_programs[n])): # NOTE: programs are reverted pre-order
+                module_type = self.vocab['program_idx_to_token'][gt_programs[n, i].item()]
+                if module_type in {'<eos>'}: # quit 
+                    break
+                #### module input
+                question_logit = self.att_func_list[i](questions_embedding[:,n,:]).squeeze()
+                mask = np.ones(question_logit.size(0))
+                mask[0:questions_len[n]] = 0
+                mask_tensor = torch.ByteTensor(mask).to(self.device)
+                question_logit.data.masked_fill_(mask_tensor, -float('inf'))
+                question_att = nn.functional.softmax(question_logit, dim=0) #(seq_len, )
+                query = torch.matmul(question_att, questions_embedding[:,n,:]) #(dim_word, )
+                query = self.map_word_to_v(query) #(dim_v, )
+                ####
+
+                module = self.function_modules[module_type]
+                if module_type == 'relate':
+                    output = module(output, feat_edge, query)
+                else:
+                    output = module(output, feat_input, query)
             module_outputs.append(output)
         
         ## Part 1. features from scene graph module network. (batch, dim_v)

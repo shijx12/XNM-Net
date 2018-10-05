@@ -51,8 +51,8 @@ def validate(model, data, device):
     print('validate...')
     total_acc, count = 0, 0
     for batch in tqdm(data, total=len(data)):
-        coco_ids, answers, *params = [todevice(x, device) for x in batch]
-        logits, others = model(*params)
+        coco_ids, answers, *batch_input = [todevice(x, device) for x in batch]
+        logits, others = model(*batch_input)
         acc = batch_accuracy(logits, answers)
         total_acc += acc.sum().item()
         count += answers.size(0)

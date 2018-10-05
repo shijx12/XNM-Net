@@ -121,12 +121,26 @@ def main(args):
     questions_encoded = np.asarray(questions_encoded, dtype=np.int32)
     questions_len = np.asarray(questions_len, dtype=np.int32)
     print(questions_encoded.shape)
+
+    glove_matrix = None
+    if args.mode == 'train':
+        token_itow = { i:w for w,i in vocab['question_token_to_idx'].items() }
+        print("Load glove from %s" % args.glove_pt)
+        glove = pickle.load(open(args.glove_pt, 'rb'))
+        dim_word = glove['the'].shape[0]
+        glove_matrix = []
+        for i in range(len(token_itow)):
+            vector = glove.get(token_itow[i], np.zeros((dim_word,)))
+            glove_matrix.append(vector)
+        glove_matrix = np.asarray(glove_matrix, dtype=np.float32)
+
     print('Writing')
     obj = {
         'questions': questions_encoded,
         'questions_len': questions_len,
         'image_idxs': np.asarray(image_idxs),
         'answers': answers,
+        'glove': glove_matrix,
         }
     with open(args.output_pt, 'wb') as f:
         pickle.dump(obj, f)
@@ -136,11 +150,12 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['train', 'val'])
     parser.add_argument('--answer_top', default=3000, type=int)
+    parser.add_argument('--glove_pt', default='/data1/jiaxin/dataset/glove.840B.300d.py36.pkl', help='glove pickle file')
     parser.add_argument('--input_questions_json', required=True)
     parser.add_argument('--input_annotations_json', required=True)
     parser.add_argument('--output_pt', required=True)
-    parser.add_argument('--vocab_json', default='')
+    parser.add_argument('--vocab_json', required=True)
+    parser.add_argument('--mode', choices=['train', 'val'])
     args = parser.parse_args()
     main(args)
