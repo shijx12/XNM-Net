@@ -1,0 +1,145 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+
+class AndModule(nn.Module):
+    """
+    1 unified instance: 'intersect'
+    inputs: two node attentions
+    output: attention
+    """
+    def forward(self, attn1, attn2):
+        out = torch.min(attn1, attn2)
+        return out
+
+
+class OrModule(nn.Module):
+    """ A neural module that (basically) performs a logical or on two node attention weights.
+
+    Extended Summary
+    ----------------
+    An :class:`OrModule` is a neural module that takes two input attention masks and (basically)
+    performs a set union. This would be used in a question like "How many cubes are left of the
+    brown sphere or right of the cylinder?" After localizing the regions left of the brown sphere
+    and right of the cylinder, an :class:`OrModule` would be used to find the union of the two. Its
+    output would then go into an :class:`AttentionModule` that finds cubes.
+    """
+    def forward(self, attn1, attn2):
+        out = torch.max(attn1, attn2)
+        return out
+
+
+class NotModule(nn.Module):
+    """ A neural module that (basically) performs a logical not on a node attention weight
+    """
+    def forward(self, attn):
+        out = 1.0 - attn
+        return out
+
+
+class AttendNodeModule(nn.Module):
+    """ A neural module that (basically) attends graph nodes based on a query.
+
+    """
+    def forward(self, node_vectors, query):
+        """
+        Args:
+            node_vectors [Tensor] (num_node, dim_v)
+            query [Tensor] (dim_v, )
+        Returns:
+            attn [Tensor] (num_node, ): node attentions by a softmax layer
+        """
+        assert node_vectors.size(1) == query.size(0)
+        logit = torch.matmul(node_vectors, query)
+        # attn = F.softmax(logit, dim=0)
+        attn = F.sigmoid(logit/0.1)
+
+        return attn
+
+
+class AttendEdgeModule(nn.Module):
+    """ A neural module that (basically) attends graph edge based on a query.
+
+    """
+    def forward(self, edge_cat_vectors, query, cat_matrix):
+        """
+        Args:
+            edge_cat_vectors [Tensor] (num_edge_cat, dim_v): Vectors of edge categories, such as 'left', 'right', 'color', 'shape' and etc.
+            query [Tensor] (dim_v, )
+            cat_matrix [LongTensor] (num_node, num_node, num_rel) : cat_matrix[i][j] is the indexes of relationship category between node i and j. num_rel is the maximum number of relationships between each pair.
+        Returns:
+            attn [Tensor] (num_node, ): Edge attention weights
+        """
+        logit = torch.matmul(edge_cat_vectors, query)
+        # Trick! make it easier to get rid of sub-optimal hole
+        #cat_attn = F.softmax(logit/0.01, dim=0) # (num_edge_cat, )
+        cat_attn = F.softmax(logit, dim=0) # (num_edge_cat, )
+        
+        # cat 0 means no edge, so assign zero to its weight and renormalize cat_attn
+        mask = torch.ones(logit.size(0)).to(query.device)
+        mask[0] = 0
+        cat_attn = cat_attn * mask
+        cat_attn /= cat_attn.sum()
+        #print(cat_attn)
+        entropy = - torch.sum(cat_attn * torch.log(cat_attn + 1e-8))
+
+        # -----------
+        num_node, num_rel = cat_matrix.size(0), cat_matrix.size(2)
+        cat_attn = cat_attn.view(-1, 1, 1).expand(-1, num_node, num_rel) # (num_edge_cat, num_node, num_rel)
+        attn = torch.gather(cat_attn, dim=0, index=cat_matrix) # (num_node, num_node, num_rel)
+        attn = torch.max(attn, dim=2)[0] # (num_node, num_node)
+        return attn, entropy
+
+
+class AttendDenseEdgeModule(nn.Module):
+    def forward(self, edge_vectors, query):
+        # edge_vectors: (n, n, dim)
+        # query: (dim, )
+        query = query.view(1, 1, -1).expand_as(edge_vectors)
+        logit = torch.sum(edge_vectors * query, dim=2) # (n, n)
+        attn = F.sigmoid(logit)
+        return attn
+
+class AttendLearnedEdgeModule(nn.Module):
+    def forward(self, edge_cat_vectors, query, cat_matrix):
+        edge_vectors = torch.matmul(cat_matrix, edge_cat_vectors) # (n,n,dim)
+        query = query.view(1, 1, -1).expand_as(edge_vectors)
+        logit = torch.sum(edge_vectors * query, dim=2) # (n, n)
+        attn = F.sigmoid(logit)
+        entropy = torch.mean(-torch.sum(cat_matrix * torch.log(cat_matrix + 1e-8), dim=2)) 
+        return attn, entropy
+
+
+
+class TransConnectModule(nn.Module):
+    """ A neural module that transforms the node attention vector according to a connectivity matrix
+
+    """
+    def forward(self, node_attn, conn_matrix):
+        """
+        Args:
+            node_attn [Tensor] (num_node, )
+            conn_matrix [Tensor] (num_node, num_node) : Connectivity adjacent matrix, whose [i][j]==1 iff. there is an edge between node i and j.
+        Returns:
+            new_attn [Tensor] (num_node, )
+        """
+        new_attn = torch.matmul(node_attn, conn_matrix.float())
+        return new_attn
+
+
+class TransWeightModule(nn.Module):
+    """ A neural module that transforms the node attention vector according to a weighted adjacent matrix, which is obtained by edge attention
+
+    """
+    def forward(self, node_attn, weit_matrix):
+        """
+        Args:
+            node_attn [Tensor] (num_node, )
+            weit_matrix [Tensor] (num_node, num_node) : Weighted adjacent matrix produced by edge attention.
+        Returns:
+            new_attn [Tensor] (num_node, )
+        """
+        new_attn = torch.matmul(node_attn, weit_matrix)
+        return new_attn
+
