@@ -44,16 +44,16 @@ def train(args):
 
     logging.info("Create model.........")
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model_kwargs = {
-        'vocab': train_loader.vocab,
-        'dim_pre_v': args.dim_pre_v,
-        'dim_v': args.dim_v,
-    }
+    model_kwargs = { k:v for k,v in vars(args).items() if k in {
+        'dim_v', 'dim_pre_v', 'num_edge_cat', 'num_class', 'num_attribute',
+        } }
+    model_kwargs_tosave = copy.deepcopy(model_kwargs) 
+    model_kwargs['vocab'] = train_loader.vocab
     model = XNMNet(**model_kwargs).to(device)
     logging.info(model)
 
     optimizer = optim.Adam(model.parameters(), args.lr, weight_decay=args.l2reg)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=[1], gamma=args.lr_decay)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=[1], gamma=0.1)
     criterion = nn.CrossEntropyLoss().to(device)
     logging.info("Start training........")
     writer = SummaryWriter(os.path.join(args.save_dir, 'log'))
@@ -63,41 +63,34 @@ def train(args):
         for i, batch in enumerate(train_loader.generator()):
             iter_count += 1
             progress = epoch+i/len(train_loader)
-            _, answers, programs, program_inputs, conn_matrixes, cat_matrixes, pre_v = \
+            answers, questions, *batch_input = \
                     [todevice(x, device) for x in batch]
 
-            logits = model(programs, program_inputs, conn_matrixes, cat_matrixes, pre_v)
+            logits, others = model(*batch_input)
             loss = criterion(logits, answers)
-            regular = torch.abs(torch.eye(9).to(device) - torch.matmul(model.edge_cat_vectors, model.edge_cat_vectors.t())).sum()
+            regular = torch.abs(torch.eye(args.num_edge_cat).to(device) - torch.matmul(model.edge_cat_vectors, model.edge_cat_vectors.t())).sum()
+            #loss += args.regular_weight * others['entropy']
             loss += args.regular_weight * regular
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            if (i+1) % 100 == 0:
+            if (i+1) % (len(train_loader) // 100) == 0:
                 logging.info("Progress %.3f  loss = %.3f" % (progress, loss.item()))
-            if (i+1) % 10 == 0:
-                writer.add_scalar('loss', loss, iter_count)
-                for name, param in model.named_parameters():
-                    writer.add_histogram(name, param.clone().cpu().data.numpy(), iter_count)
-                    if param.grad is not None:
-                        writer.add_histogram(name+'/grad', param.grad.clone().cpu().data.numpy(), iter_count)
-            if args.val and (i+1) % 2000 == 0:
-                valid_acc = validate(model, val_loader, device)
-                writer.add_scalar('valid_acc', valid_acc, iter_count)
-                logging.info('\n==================\n Valid Accuracy: %.3f \n==================' % valid_acc)
-        # learning rate decay
         scheduler.step()
+        valid_acc = validate(model, val_loader, device)
+        logging.info('\n ~~~~~~ Valid Accuracy: %.4f ~~~~~~~\n' % valid_acc)
 
-        save_checkpoint(epoch, model, optimizer, os.path.join(args.save_dir, 'model.pt')) 
-        logging.info(' >>>>>> save model of EPOCH %d <<<<<<' % (epoch+1))
+        save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, os.path.join(args.save_dir, 'model.pt')) 
+        logging.info(' >>>>>> save to %s <<<<<<' % (args.save_dir))
 
 
-def save_checkpoint(epoch, model, optimizer, filename):
+def save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, filename):
     state = {
         'epoch': epoch,
         'state_dict': model.state_dict(),
         'optimizer': optimizer.state_dict()
+        'model_kwargs': model_kwargs_tosave,
         }
     torch.save(state, filename)
 
@@ -106,25 +99,26 @@ def save_checkpoint(epoch, model, optimizer, filename):
 def main():
     parser = argparse.ArgumentParser()
     # input and output
+    parser.add_argument('--save_dir', type=str, required=True, help='path to save checkpoints and logs')
     parser.add_argument('--input_dir', default='/data/sjx/CLEVR-Exp/data')
     parser.add_argument('--train_question_pt', default='train_questions.pt')
     parser.add_argument('--train_scene_pt', default='train_scenes.pt')
     parser.add_argument('--val_question_pt', default='val_questions.pt')
     parser.add_argument('--val_scene_pt', default='val_scenes.pt')
-    parser.add_argument('--save_dir', type=str, required=True, help='path to save checkpoints and logs')
     parser.add_argument('--vocab_json', default='vocab.json')
     # training parameters
     parser.add_argument('--lr', default=0.001, type=float)
-    parser.add_argument('--lr_decay', default=0.1, type=float)
     parser.add_argument('--l2reg', default=0, type=float)
     parser.add_argument('--num_epoch', default=3, type=int)
     parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--regular_weight', default=0.0001, type=float)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
-    parser.add_argument('--val', action='store_true')
     # model hyperparameters
     parser.add_argument('--dim_pre_v', default=15, type=int)
     parser.add_argument('--dim_v', default=128, type=int)
+    parser.add_argument('--num_class', default=28, type=int)
+    parser.add_argument('--num_edge_cat', default=9, type=int)
+    parser.add_argument('--num_attribute', default=15, type=int)
     args = parser.parse_args()
 
     # make logging.info display into both shell and file

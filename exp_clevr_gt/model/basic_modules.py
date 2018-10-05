@@ -16,14 +16,6 @@ class AndModule(nn.Module):
 
 class OrModule(nn.Module):
     """ A neural module that (basically) performs a logical or on two node attention weights.
-
-    Extended Summary
-    ----------------
-    An :class:`OrModule` is a neural module that takes two input attention masks and (basically)
-    performs a set union. This would be used in a question like "How many cubes are left of the
-    brown sphere or right of the cylinder?" After localizing the regions left of the brown sphere
-    and right of the cylinder, an :class:`OrModule` would be used to find the union of the two. Its
-    output would then go into an :class:`AttentionModule` that finds cubes.
     """
     def forward(self, attn1, attn2):
         out = torch.max(attn1, attn2)
@@ -86,13 +78,14 @@ class AttendEdgeModule(nn.Module):
         mask[0] = 0
         cat_attn = cat_attn * mask
         cat_attn /= cat_attn.sum()
+        entropy = - torch.sum(cat_attn * torch.log(cat_attn + 1e-8))
 
         # -----------
         num_node, num_rel = cat_matrix.size(0), cat_matrix.size(2)
         cat_attn = cat_attn.view(-1, 1, 1).expand(-1, num_node, num_rel) # (num_edge_cat, num_node, num_rel)
         attn = torch.gather(cat_attn, dim=0, index=cat_matrix) # (num_node, num_node, num_rel)
         attn = torch.max(attn, dim=2)[0] # (num_node, num_node)
-        return attn
+        return attn, entropy
 
 
 class TransConnectModule(nn.Module):

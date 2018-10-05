@@ -14,9 +14,52 @@ def validate(model, data, device):
     model.eval()
     print('validate...')
     for batch in tqdm(data.generator(), total=len(data)):
-        questions, answers, programs, program_inputs, conn_matrixes, cat_matrixes, pre_v = \
-                [todevice(x, device) for x in batch]
-        logits = model(programs, program_inputs, conn_matrixes, cat_matrixes, pre_v)
+        answers, questions, *batch_input = [todevice(x, device) for x in batch]
+        logits, others = model(*batch_input)
+        predicts = logits.max(1)[1]
+        correct += torch.eq(predicts, answers).long().sum().item()
+        count += answers.size(0)
+    acc = correct / count
+    return acc
+
+
+def validate_with_david_generated_program(model, data, device, pretrained_dir):
+    program_generator = load_program_generator(os.path.join(pretrained_dir, 'program_generator.pt')).to(device)
+    david_vocab = json.load(open(os.path.join(pretrained_dir, 'david_vocab.json')))
+    david_vocab['program_idx_to_token'] = invert_dict(david_vocab['program_token_to_idx'])
+
+    count, correct = 0, 0
+    model.eval()
+    print('validate...')
+    for batch in tqdm(data, total=len(data)):
+        answers, questions, programs, program_inputs, *batch_input = [todevice(x, device) for x in batch]
+        programs, program_inputs = [], []
+        # generate program using david model for each question
+        for i in range(questions.size(0)):
+            question_str = []
+            for j in range(questions.size(1)):
+                word = data.vocab['question_idx_to_token'][questions[i,j].item()]
+                if word == '<START>': continue
+                if word == '<END>': break
+                question_str.append(word)
+            question_str = ' '.join(question_str) # question string
+            david_program = generate_single_program(question_str, program_generator, david_vocab, device)
+            david_program = [david_vocab['program_idx_to_token'][i.item()] for i in david_program.squeeze()]
+            # convert david program to ours. return two index lists
+            program, program_input = convert_david_program_to_mine(david_program, data.vocab)
+            programs.append(program)
+            program_inputs.append(program_input)
+        # padding
+        max_len = max(len(p) for p in programs)
+        for i in range(len(programs)):
+            while len(programs[i]) < max_len:
+                programs[i].append(vocab['program_token_to_idx']['<NULL>'])
+                program_inputs[i].append(vocab['question_token_to_idx']['<NULL>'])
+        # to tensor
+        programs = torch.LongTensor(programs).to(device)
+        program_inputs = torch.LongTensor(program_inputs).to(device)
+
+        logits, others = model(programs, program_inputs, *batch_input)
         predicts = logits.max(1)[1]
         correct += torch.eq(predicts, answers).long().sum().item()
         count += answers.size(0)
@@ -43,7 +86,7 @@ def show_edge_attention(model, data):
 def visualize(model, data, device):
     model.eval()
     for batch in data.generator():
-        questions, answers, programs, program_inputs, conn_matrixes, cat_matrixes, pre_v = \
+        answers, questions, programs, program_inputs, conn_matrixes, cat_matrixes, pre_v = \
                 [todevice(x, device) for x in batch]
         predict_str, intermediates = model.forward_and_return_intermediates(programs, program_inputs, conn_matrixes, cat_matrixes, pre_v)
         answer_str = data.vocab['answer_idx_to_token'][answers[0].item()]
@@ -84,11 +127,10 @@ if __name__ == '__main__':
     parser.add_argument('--val_question_pt', default='val_questions.pt')
     parser.add_argument('--val_scene_pt', default='val_scenes.pt')
     parser.add_argument('--vocab_json', default='vocab.json')
-    # model hyperparameters
-    parser.add_argument('--dim_pre_v', default=15, type=int)
-    parser.add_argument('--dim_v', default=128, type=int)
+    parser.add_argument('--pretrained_dir', default='../pretrained')
     # control parameters
     parser.add_argument('--mode', default='vis', choices=['vis', 'val'])
+    parser.add_argument('--program', default='gt', choices=['gt', 'david'])
     args = parser.parse_args()
 
     args.vocab_json = os.path.join(args.input_dir, args.vocab_json)
@@ -104,16 +146,26 @@ if __name__ == '__main__':
         'shuffle': False
     }
     val_loader = ClevrDataLoader(**val_loader_kwargs)
-    model_kwargs = {
-        'vocab': val_loader.vocab,
-        'dim_pre_v': args.dim_pre_v,
-        'dim_v': args.dim_v,
-    }
+    
+    loaded = torch.load(args.ckpt, map_location={'cuda:0': 'cpu'})
+    model_kwargs = loaded['model_kwargs']
+    model_kwargs.update({'vocab': val_loader.vocab})
+#    model_kwargs = {
+#        'vocab': val_loader.vocab,
+#        'dim_pre_v': 15,
+#        'dim_v': 128,
+#    }
     model = XNMNet(**model_kwargs).to(device)
-    model.load_state_dict(torch.load(args.ckpt, map_location={'cuda:0': 'cpu'})['state_dict'])
+    model.load_state_dict(loaded['state_dict'])
 
     if args.mode =='vis':
+        show_edge_attention(model, val_loader)
         visualize(model, val_loader, device)
     elif args.mode == 'val':
-        val_acc = validate(model, val_loader, device)
+        if args.program == 'gt':
+            print('validate with **ground truth** program')
+            val_acc = validate(model, val_loader, device)
+        elif args.program == 'david':
+            print('validate with **david predicted** program')
+            val_acc = validate_with_david_generated_program(model, val_loader, device, args.pretrained_dir)
         print("Validate acc: %.4f" % val_acc)

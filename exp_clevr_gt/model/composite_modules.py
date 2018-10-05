@@ -47,7 +47,7 @@ class SameModule(nn.Module):
         self.attnNot = NotModule()
         
     def forward(self, attn, cat_matrix, edge_cat_vectors, query, conn_matrix):
-        attribute_attn = self.relate(attn, cat_matrix, edge_cat_vectors, query, None)
+        attribute_attn, entropy = self.relate(attn, cat_matrix, edge_cat_vectors, query, None)
         new_object_attn = self.transConn(attribute_attn, conn_matrix)
         # exclude current object
         out = self.attnAnd(self.attnNot(attn), new_object_attn)
@@ -102,9 +102,9 @@ class RelateModule(nn.Module):
         Returns:
             new attention
         """
-        weit_matrix = self.attendEdge(edge_cat_vectors, query, cat_matrix)
+        weit_matrix, entropy = self.attendEdge(edge_cat_vectors, query, cat_matrix)
         out = self.transWeit(attn, weit_matrix)
-        return out
+        return out, entropy
 
 
 class QueryModule(nn.Module):
@@ -117,9 +117,9 @@ class QueryModule(nn.Module):
         self.relate = RelateModule()
 
     def forward(self, attn, cat_matrix, edge_cat_vectors, query, feat):
-        attribute_attn = self.relate(attn, cat_matrix, edge_cat_vectors, query, None)
+        attribute_attn, entropy = self.relate(attn, cat_matrix, edge_cat_vectors, query, None)
         out = torch.matmul(attribute_attn, feat)
-        return out # (dim_v, )
+        return out, entropy # (dim_v, )
 
 
 class ComparisonModule(nn.Module):

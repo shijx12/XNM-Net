@@ -81,8 +81,7 @@ def load_vocab(path):
 class ClevrDataset():
 
     def __init__(self, questions, image_indices, programs, program_inputs, answers,
-                       conn_matrixes, edge_matrixes, vertex_vectors,
-                       indices=None):
+                       conn_matrixes, edge_matrixes, vertex_vectors):
         """
         Parameters
         - conn_matrixes [dict] :
@@ -94,8 +93,6 @@ class ClevrDataset():
         ----------
 
         """
-        #assert len(questions) == len(image_indices) == len(programs) == len(program_inputs) == len(answers), \
-        #    'The questions, image indices, programs, and answers are not all the same size!'
         assert len(conn_matrixes) == len(edge_matrixes) == len(vertex_vectors)
 
         # convert data to tensor
@@ -108,15 +105,6 @@ class ClevrDataset():
         self.conn_matrixes = { i: torch.LongTensor(np.asarray(m)) for i, m in conn_matrixes.items() } # ByteTensor is enough
         self.edge_matrixes = { i: torch.LongTensor(np.asarray(m)) for i, m in edge_matrixes.items() }
         self.vertex_vectors = { i: torch.FloatTensor(np.asarray(v)) for i, v in vertex_vectors.items() }
-
-
-        if indices is not None:
-            indices = torch.LongTensor(np.asarray(indices))
-            self.all_questions = self.all_questions[indices]
-            self.all_image_idxs = self.all_image_idxs[indices]
-            self.all_programs = self.all_programs[indices]
-            self.all_program_inputs = self.all_program_inputs[indices]
-            self.all_answers = self.all_answers[indices]
 
     def __getitem__(self, index):
         question = self.all_questions[index]
@@ -152,40 +140,19 @@ def clevr_collate(batch):
     # so they are conveyed as list of tensor
     conn_matrix_batch, edge_matrix_batch, vertex_vector_batch = transposed[4], transposed[5], transposed[6]
 
-    return [question_batch, answer_batch, program_seq_batch, program_input_batch,\
+    return [answer_batch, question_batch, program_seq_batch, program_input_batch,\
             conn_matrix_batch, edge_matrix_batch, vertex_vector_batch]
 
 
 class ClevrDataLoader():
 
     def __init__(self, **kwargs):
-        """ 
-        Parameters
-        ----------
-        - question_pt : Union[pathlib.Path, str]
-            Path to the pickle file holding the questions, image indices, programs, and answers.
-
-        - scene_pt [str]
-            Path to the pickle file holding the scene graphs
-
-        - vocab_json [str]
-
-        - shuffle : bool, optional
-            Whether to shuffle the data.
-
-        - indices : Sequence[int], optional
-            The question indices to load, or None.
-        """
         if 'question_pt' not in kwargs:
             raise ValueError('Must give question_pt')
         if 'scene_pt' not in kwargs:
             raise ValueError('Must give scene_pt')
         if 'vocab_json' not in kwargs:
             raise ValueError('Must give vocab_json')
-
-        indices = None
-        if 'indices' in kwargs:
-            indices = kwargs.pop('indices')
 
         scene_pt_path = str(kwargs.pop('scene_pt'))
         print('loading scenes from %s' % (scene_pt_path))
@@ -209,7 +176,7 @@ class ClevrDataLoader():
             answers = obj['answers']
         
         self.dataset = ClevrDataset(questions, image_indices, programs, program_inputs, answers,\
-                                    conn_matrixes, edge_matrixes, vertex_vectors, indices)
+                                    conn_matrixes, edge_matrixes, vertex_vectors)
         self.scene_descs = scene_descs
         self.vocab = vocab
         self.batch_size = kwargs.pop('batch_size')

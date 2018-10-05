@@ -6,6 +6,7 @@ import torch.nn as nn
 import numpy as np
 import argparse
 import shutil
+import copy
 from tensorboardX import SummaryWriter
 
 from DataLoader import ClevrDataLoader

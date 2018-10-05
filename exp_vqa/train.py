@@ -99,7 +99,7 @@ def train(args):
             scheduler.step()
             optimizer.zero_grad()
             loss.backward()
-            #nn.utils.clip_grad_norm_(parameters=parameters, max_norm=args.clip)
+            nn.utils.clip_grad_value_(parameters=parameters, max_norm=args.clip)
             optimizer.step()
 
             if (i+1) % (len(train_loader) // 100) == 0:
@@ -115,15 +115,16 @@ def train(args):
                         print(name)
         valid_acc = validate(model, val_loader, device)
         writer.add_scalar('valid_acc', valid_acc, iter_count)
-        logging.info('\n==================\n Valid Accuracy: %.3f \n==================' % valid_acc)
-        save_checkpoint(epoch, model, model_kwargs_tosave, os.path.join(args.save_dir, 'model.pt')) 
+        logging.info('\n ~~~~~~ Valid Accuracy: %.4f ~~~~~~~\n' % valid_acc)
+        save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, os.path.join(args.save_dir, 'model.pt')) 
         logging.info(' >>>>>> save to %s <<<<<<' % (args.save_dir))
 
 
-def save_checkpoint(epoch, model, model_kwargs, filename):
+def save_checkpoint(epoch, model, optimizer, model_kwargs, filename):
     state = {
         'epoch': epoch,
         'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict()
         'model_kwargs': model_kwargs,
         }
     torch.save(state, filename)
@@ -149,7 +150,7 @@ def main():
     parser.add_argument('--l2reg', default=1e-6, type=float)
     parser.add_argument('--clip', default=0.5, type=float)
     parser.add_argument('--num_epoch', default=100, type=int)
-    parser.add_argument('--batch_size', default=256, type=int)
+    parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--fix_token_embedding', action='store_true')
     # loss lambda

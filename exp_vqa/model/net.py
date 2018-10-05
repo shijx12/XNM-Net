@@ -50,7 +50,7 @@ class XNMNet(nn.Module):
             )
         self.map_word_to_v = nn.Sequential(
                 nn.Linear(self.dim_word, self.dim_v),
-                nn.Tanh(),
+                nn.ReLU(),
                 )
         # question+attribute+relation tokens. 0 for <NULL>
         self.num_token = len(self.vocab['question_token_to_idx'])
@@ -84,9 +84,6 @@ class XNMNet(nn.Module):
                         )
                     )
             self.add_module('att_func_%d'%i, self.att_func_list[i])
-        self.reset_parameters()
-
-    def reset_parameters(self):
         for m in self.modules():
             if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
                 nn.init.xavier_uniform_(m.weight)

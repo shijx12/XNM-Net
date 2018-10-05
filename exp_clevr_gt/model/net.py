@@ -6,66 +6,33 @@ from . import basic_modules
 
 
 class XNMNet(nn.Module):
-    def __init__(self,
-                 vocab,
-                 dim_pre_v,
-                 dim_v,
-                 num_edge_cat=9,
-                 num_attribute=15,
-                 fc_dim=256):
-        """
-
-        Parameters
-        ----------
-        vocab : Dict[str, Dict[Any, Any]]
-            The vocabulary holds dictionaries that provide handles to various objects. Valid keys 
-            into vocab are
-            - 'answer_idx_to_token' whose keys are ints and values strings
-            - 'answer_token_to_idx' whose keys are strings and values ints
-            - 'program_idx_to_token' whose keys are ints and values strings
-            - 'program_token_to_idx' whose keys are strings and values ints
-            - 'edge_token_to_idx' whose keys are strings and values ints
-            - 'edge_idx_to_token' whose keys are ints and values strings
-            These value dictionaries provide retrieval of an answer word or program token from an
-            index, or an index from a word or program token.
-        """
+    def __init__(self, **kwargs):
         super().__init__()
+        for k,v in kwargs.items():
+            setattr(self, k, v)
         
         # The classifier takes the output of the last module
         # and produces a distribution over answers
         self.classifier = nn.Sequential(
-            nn.Linear(dim_v, fc_dim),
+            nn.Linear(dim_v, 256),
             nn.ReLU(),
-            nn.Linear(fc_dim, 28)  # note no softmax here
+            nn.Linear(256, self.num_class)
             )
-        for layer in self.classifier:
-            if isinstance(layer, nn.Linear):
-                nn.init.kaiming_normal_(layer.weight)
-                nn.init.constant_(layer.bias, val=0)
 
-        self.edge_cat_vectors = nn.Parameter(torch.Tensor(num_edge_cat, dim_v))
-        # nn.init.orthogonal_(self.edge_cat_vectors.data)
+        self.edge_cat_vectors = nn.Parameter(torch.Tensor(self.num_edge_cat, self.dim_v))
         nn.init.normal_(self.edge_cat_vectors.data, mean=0, std=0.01)
 
         # encode program_input, which must be included in question tokens
-        self.word_embedding = nn.Embedding(len(vocab['question_token_to_idx']), dim_v)
+        self.word_embedding = nn.Embedding(len(self.vocab['question_token_to_idx']), self.dim_v)
         nn.init.normal_(self.word_embedding.weight, mean=0, std=0.01)
 
         # map onehot node representation to feature vectors of dim_v
         self.map_pre_to_v = nn.Sequential(
-            nn.Linear(dim_pre_v, dim_v),
+            nn.Linear(self.dim_pre_v, self.dim_v),
             nn.ReLU()
             )
-        for layer in self.map_pre_to_v:
-            if isinstance(layer, nn.Linear):
-                nn.init.kaiming_normal_(layer.weight)
-                nn.init.constant_(layer.bias, val=0)
-
 
         self.function_modules = {}  # holds our modules
-        self.vocab = vocab
-        self.dim_v = dim_v
-        self.num_attribute = num_attribute
         # go through the vocab and add all the modules to our model
         for module_name in vocab['program_token_to_idx']:
             if module_name in ['<NULL>', '<START>', '<END>', '<UNK>', 'unique']:
@@ -102,6 +69,11 @@ class XNMNet(nn.Module):
             # add the module to our dictionary and register its parameters so it can learn
             self.function_modules[module_name] = module
             self.add_module(module_name, module)
+        for m in self.modules():
+            if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+                if m.bias is not None:
+                    m.bias.data.zero_()
 
 
     def forward(self, programs, program_inputs, conn_matrixes, cat_matrixes, pre_v):
@@ -115,47 +87,56 @@ class XNMNet(nn.Module):
         """
         batch_size = len(pre_v)
         device = programs[0].device
-        # assert batch_size == len(programs) == len(program_inputs)
 
         final_module_outputs = []
+        entropies = []
         for n in range(batch_size):
             feat_input = self.map_pre_to_v(pre_v[n])
             num_node = feat_input.size(0)
             saved_output, output = None, None
-            for i in range(-1, -len(programs[n])-1, -1):
-                module_type = self.vocab['program_idx_to_token'][programs[n][i].item()]
-                if module_type in {'<NULL>', '<START>', '<END>', '<UNK>', 'unique'}:
-                    continue  # the above are no-ops in our model
-                module_input = program_inputs[n][i] # <NULL> if no input for module
-                query = self.word_embedding(module_input) # used in node or edge attention
-
-                
-                module = self.function_modules[module_type]
-                if module_type == 'scene':
-                    # store the previous output; it will be needed later
-                    # scene is just a flag, performing no computation
-                    saved_output = output
-                    output = torch.ones(num_node).to(device)
-                    output[-self.num_attribute:] = 0 # assign 0 to attribute nodes
-                    continue
-                
-                if module_type in {'intersect', 'union', 
-                            'equal', 'equal_integer', 'less_than', 'greater_than'}:
-                    output = module(output, saved_output)  # these modules take two feature maps
-                elif module_type in {'exist', 'count'}:
-                    output = module(output) # take as input one attention
-                elif module_type in {'query', 'relate'}:
-                    output = module(output, cat_matrixes[n], self.edge_cat_vectors, query, feat_input)
-                elif module_type == 'same':
-                    output = module(output, cat_matrixes[n], self.edge_cat_vectors, query, conn_matrixes[n])
-                elif module_type == 'filter':
-                    output = module(output, conn_matrixes[n], feat_input, query)
+            try:
+                for i in range(-1, -len(programs[n])-1, -1):
+                    module_type = self.vocab['program_idx_to_token'][programs[n][i].item()]
+                    if module_type in {'<NULL>', '<START>', '<END>', '<UNK>', 'unique'}:
+                        continue  # the above are no-ops in our model
+                    module_input = program_inputs[n][i] # <NULL> if no input for module
+                    query = self.word_embedding(module_input) # used in node or edge attention
+                    
+                    module = self.function_modules[module_type]
+                    if module_type == 'scene':
+                        # store the previous output; it will be needed later
+                        # scene is just a flag, performing no computation
+                        saved_output = output
+                        output = torch.ones(num_node).to(device)
+                        output[-self.num_attribute:] = 0 # assign 0 to attribute nodes
+                        continue
+                    
+                    if module_type in {'intersect', 'union', 
+                                'equal', 'equal_integer', 'less_than', 'greater_than'}:
+                        output = module(output, saved_output)  # these modules take two feature maps
+                    elif module_type in {'exist', 'count'}:
+                        output = module(output) # take as input one attention
+                    elif module_type in {'query', 'relate'}:
+                        output, entropy = module(output, cat_matrixes[n], self.edge_cat_vectors, query, feat_input)
+                        entropies.append(entropy)
+                    elif module_type == 'same':
+                        output = module(output, cat_matrixes[n], self.edge_cat_vectors, query, conn_matrixes[n])
+                    elif module_type == 'filter':
+                        output = module(output, conn_matrixes[n], feat_input, query)
+                    else:
+                        raise Exception("Invalid module type")
+            except Exception as e:
+                if self.training:
+                    raise
                 else:
-                    raise Exception("Invalid module type")
-     
+                    print("Find a wrong program")
+                    output = torch.zeros(self.dim_v).to(device)
             final_module_outputs.append(output)
             
         final_module_outputs = torch.stack(final_module_outputs)
+        others = {
+                'entropy': torch.mean(torch.stack(entropies)) if len(entropies)>0 else 0
+                }
         return self.classifier(final_module_outputs)
 
 
