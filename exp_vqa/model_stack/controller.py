@@ -23,13 +23,7 @@ class Controller(nn.Module):
             nn.Linear(self.dim_lstm, self.num_module)
             )
         self.fc_raw_cv = nn.Linear(self.dim_lstm, 1)
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        for layer in chain(self.fc_q_list, (self.fc_q_cat_c, self.fc_raw_cv), self.fc_module_weight):
-            if isinstance(layer, nn.Linear):
-                nn.init.kaiming_normal_(layer.weight)
-                nn.init.constant_(layer.bias, val=0)
+        self.c_init = nn.Parameter(torch.zeros(1, self.dim_lstm).normal_(mean=0, std=np.sqrt(1/self.dim_lstm)))
 
     def forward(self, lstm_seq, q_encoding, embed_seq, seq_length_batch):
         """        
@@ -42,8 +36,7 @@ class Controller(nn.Module):
         device = lstm_seq.device
         batch_size, seq_max_len = lstm_seq.size(1), lstm_seq.size(0)
         seq_length_batch = seq_length_batch.view(1, batch_size).expand(seq_max_len, batch_size) # [seq_max_len, batch_size]
-        c_prev = torch.zeros(1, self.dim_lstm).normal_(mean=0, std=np.sqrt(1. / self.dim_lstm)).to(device)
-        c_prev = c_prev.expand(batch_size, self.dim_lstm) # (batch_size, dim)
+        c_prev = self.c_init.expand(batch_size, self.dim_lstm) # (batch_size, dim)
         module_logit_list = []
         module_prob_list = []
         c_list, cv_list = [], []
@@ -55,7 +48,7 @@ class Controller(nn.Module):
             module_logit = self.fc_module_weight(cq_i) # [batch_size, num_module]
             module_prob = nn.functional.gumbel_softmax(module_logit, hard=self.use_gumbel) # [batch_size, num_module]
 
-            elem_prod = cq_i * lstm_seq # [seq_max_len, batch_size, dim]
+            elem_prod = cq_i.unsqueeze(0) * lstm_seq # [seq_max_len, batch_size, dim]
             raw_cv_i = self.fc_raw_cv(elem_prod).squeeze(2) # [seq_max_len, batch_size]
             invalid_mask = torch.arange(seq_max_len).long().to(device).view(-1, 1).expand_as(raw_cv_i).ge(seq_length_batch)
             raw_cv_i.data.masked_fill_(invalid_mask, -float('inf'))

@@ -7,7 +7,6 @@ import numpy as np
 import argparse
 import time
 import shutil
-from tensorboardX import SummaryWriter
 from IPython import embed
 
 from DataLoader import VQADataLoader
@@ -28,18 +27,18 @@ def train(args):
         'vocab_json': args.vocab_json,
         'feature_h5': args.feature_h5,
         'batch_size': args.batch_size,
-        'num_workers': 4,
+        'spatial': args.spatial,
+        'num_workers': 1,
         'shuffle': True,
-        'pin_memory': True,
     }
     val_loader_kwargs = {
         'question_pt': args.val_question_pt,
         'vocab_json': args.vocab_json,
         'feature_h5': args.feature_h5,
         'batch_size': args.batch_size,
-        'num_workers': 4,
+        'spatial': args.spatial,
+        'num_workers': 3,
         'shuffle': False,
-        'pin_memory': True,
     }
     
     train_loader = VQADataLoader(**train_loader_kwargs)
@@ -50,14 +49,15 @@ def train(args):
     model_kwargs = {
         'vocab': train_loader.vocab,
         'dim_v': args.dim_v,
+        'dim_edge': args.dim_edge,
         'dim_word': args.dim_word,
         'dim_hidden': args.dim_hidden,
         'dim_vision': args.dim_vision,
         'class_mode': args.class_mode,
         'dropout_prob': args.dropout,
         'device': device,
+        'spatial': args.spatial,
         'cls_fc_dim': args.cls_fc_dim,
-        'k_desc': args.k_desc,
         'program_scheme': ['find', 'relate', 'describe'],
     }
     model_kwargs_tosave = { k:v for k,v in model_kwargs.items() if k != 'vocab' }
@@ -66,54 +66,43 @@ def train(args):
     logging.info('load glove vectors')
     train_loader.glove_matrix = torch.FloatTensor(train_loader.glove_matrix).to(device)
     model.token_embedding.weight.data.set_(train_loader.glove_matrix)
-    if args.fix_token_embedding:
-        model.token_embedding.weight.requires_grad = False
     ################################################################
 
     parameters = [p for p in model.parameters() if p.requires_grad]
     optimizer = optim.Adam(parameters, args.lr, weight_decay=args.l2reg)
+
+    start_epoch = 0
+    if args.restore:
+        print("Restore checkpoint and optimizer...")
+        ckpt = os.path.join(args.save_dir, 'model.pt')
+        ckpt = torch.load(ckpt, map_location={'cuda:0': 'cpu'})
+        start_epoch = ckpt['epoch'] + 1
+        model.load_state_dict(ckpt['state_dict'])
+        optimizer.load_state_dict(ckpt['optimizer'])
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.5**(1 / args.lr_halflife))
-    logging.info("Start training........")
-    writer = SummaryWriter(os.path.join(args.save_dir, 'log'))
-    tic = time.time()
-    iter_count = 0
     
+    logging.info("Start training........")
     #print(validate(model, val_loader, device))
-    for epoch in range(args.num_epoch):
+    for epoch in range(start_epoch, args.num_epoch):
         model.train()
         for i, batch in enumerate(train_loader):
-            iter_count += 1
             progress = epoch+i/len(train_loader)
             coco_ids, answers, *batch_input = [todevice(x, device) for x in batch]
-            # questions, questions_len, conn_matrixes, cat_matrixes, vertex_indexes, edge_indexes, vision_feat
             logits, others = model(*batch_input)
             ##################### loss #####################
             nll = -nn.functional.log_softmax(logits, dim=1)
-            ce_loss = (nll * answers / 10).sum(dim=1).mean()
-            # layout_loss = torch.mean(-others['log_seq_prob']) # gt: layout_loss; rl: policy_loss
-            # entropy_loss = args.lambda_entropy * torch.mean(others['neg_entropy'])
-            # policy_loss = torch.mean((ce_loss_all.detach() - policy_gradient_baseline) * others['log_seq_prob']) # element-wise multiply
-            loss = ce_loss
+            loss = (nll * answers / 10).sum(dim=1).mean()
             #################################################
             scheduler.step()
             optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_value_(parameters=parameters, max_norm=args.clip)
+            nn.utils.clip_grad_value_(parameters=parameters, clip_value=0.5)
             optimizer.step()
 
             if (i+1) % (len(train_loader) // 100) == 0:
-                logging.info("Progress %.3f  ce_loss = %.3f" % (progress, ce_loss.item()))
+                logging.info("Progress %.3f  ce_loss = %.3f" % (progress, loss.item()))
                 #print(progress)
-            if (i+1) % (len(train_loader)) == 0:
-                for name, param in model.named_parameters():
-                    try:
-                        writer.add_histogram(name, param, iter_count)
-                        if param.grad is not None:
-                            writer.add_histogram(name+'/grad', param.grad, iter_count)
-                    except Exception as e:
-                        print(name)
         valid_acc = validate(model, val_loader, device)
-        writer.add_scalar('valid_acc', valid_acc, iter_count)
         logging.info('\n ~~~~~~ Valid Accuracy: %.4f ~~~~~~~\n' % valid_acc)
         save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, os.path.join(args.save_dir, 'model.pt')) 
         logging.info(' >>>>>> save to %s <<<<<<' % (args.save_dir))
@@ -134,39 +123,40 @@ def main():
     parser = argparse.ArgumentParser()
     # input and output
     parser.add_argument('--save_dir', type=str, required=True, help='path to save checkpoints and logs')
-    #parser.add_argument('--input_dir', default='/data/sjx/VQA-Exp/data')
-    parser.add_argument('--input_dir', default='/data1/jiaxin/exp/vqa/data')
+    parser.add_argument('--input_dir', default='/data/sjx/VQA-Exp/data')
+    #parser.add_argument('--input_dir', default='/data1/jiaxin/exp/vqa/data')
     parser.add_argument('--data_type', default='coco', choices=['coco', 'vg'])
     parser.add_argument('--train_question_pt', default='train_questions.pt')
     parser.add_argument('--val_question_pt', default='val_questions.pt')
     parser.add_argument('--vocab_json', default='vocab.json')
     parser.add_argument('--feature_h5', default='trainval_feature.h5')
+    parser.add_argument('--restore', action='store_true')
     # training parameters
     parser.add_argument('--lr', default=1.5e-3, type=float)
     parser.add_argument('--lr_halflife', default=50000, type=int)
-    parser.add_argument('--l2reg', default=1e-6, type=float)
-    parser.add_argument('--clip', default=0.5, type=float)
-    parser.add_argument('--num_epoch', default=100, type=int)
-    parser.add_argument('--batch_size', default=128, type=int)
+    parser.add_argument('--l2reg', default=0, type=float)
+    parser.add_argument('--num_epoch', default=150, type=int)
+    parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
-    parser.add_argument('--fix_token_embedding', action='store_true')
-    # loss lambda
-    parser.add_argument('--lambda_answer', default=1, type=float)
     # model hyperparameters
-    parser.add_argument('--dim_hidden', default=1024, type=int, help='hidden state of seq2seq parser')
     parser.add_argument('--dim_word', default=300, type=int, help='dim of word/node/attribute/edge embedding')
-    parser.add_argument('--dim_v', default=512, type=int, help='dim of word/node/attribute/edge embedding')
+    parser.add_argument('--dim_hidden', default=1024, type=int, help='hidden state of seq2seq parser')
+    parser.add_argument('--dim_v', default=512, type=int, help='dim of node embedding')
+    parser.add_argument('--dim_edge', default=256, type=int, help='dim of edge embedding')
     parser.add_argument('--dim_vision', default=2048, type=int)
     parser.add_argument('--cls_fc_dim', default=1024, type=int)
-    parser.add_argument('--k_desc', default=16, type=int)
     parser.add_argument('--class_mode', default='qvc', choices=['qvc', 'qv', 'c'])
     parser.add_argument('--dropout', default=0.5, type=float)
+    parser.add_argument('--spatial', action='store_true')
     args = parser.parse_args()
 
     # make logging.info display into both shell and file
-    if os.path.exists(args.save_dir):
-        shutil.rmtree(args.save_dir)
-    os.mkdir(args.save_dir)
+    if not args.restore:
+        if os.path.exists(args.save_dir):
+            shutil.rmtree(args.save_dir)
+        os.mkdir(args.save_dir)
+    else:
+        assert os.path.isdir(args.save_dir)
     fileHandler = logging.FileHandler(os.path.join(args.save_dir, 'stdout.log'))
     fileHandler.setFormatter(logFormatter)
     rootLogger.addHandler(fileHandler)
@@ -181,6 +171,8 @@ def main():
     # set random seed
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    if args.spatial:
+        args.dim_vision += 5
 
     train(args)
 

@@ -1,13 +1,13 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 from itertools import chain
-from .basic_modules import *
 from utils.misc import convert_to_one_hot
 from IPython import embed
 
 MODULE_INPUT_NUM = {
-    '_NoOp': 0,
+    '_NoOp': 1,
     '_Find': 0,
     '_Transform': 1,
     '_Filter': 1,
@@ -25,132 +25,122 @@ MODULE_OUTPUT_NUM = {
 }
 
 """
-Note that batch_size=1 in all of my modules.
-att_stack: (batch_size, dim_att(i.e., num_vertex), stack_len)
-att: (batch_size, dim_att, 1)
+att_stack: (batch_size, dim_att, glimpse, stack_len)
+att: (batch_size, dim_att, glimpse)
 stack_ptr: (batch_size, stack_len)
-mem: (batch_size, dim_v)
+mem: (batch_size, dim_vision * glimpse)
 """
 
 class NoOpModule(nn.Module):
-    def __init__(self, dim_v):
+    def __init__(self, **kwargs):
         super().__init__()
 
-    def forward(self, cat_matrix, conn_matrix, edge_cat_vectors, feat, c_i, att_stack, stack_ptr, mem_in):
+    def forward(self, vision_feat, feat, feat_edge, c_i, relation_mask, att_stack, stack_ptr, mem_in):
         return att_stack, stack_ptr, mem_in
 
 
 class AndModule(nn.Module):
-    def __init__(self, dim_v):
+    def __init__(self, **kwargs):
         super().__init__()
-        self.mem_zero = torch.zeros(1, dim_v)
 
-    def forward(self, cat_matrix, conn_matrix, edge_cat_vectors, feat, c_i, att_stack, stack_ptr, mem_in):
-        # feat (num_vertex, dim_v): vertex embedding
-        # c_i (dim_v): query
+    def forward(self, vision_feat, feat, feat_edge, c_i, relation_mask, att_stack, stack_ptr, mem_in):
         att2 = _read_from_stack(att_stack, stack_ptr)
+        att_stack = _write_to_stack(att_stack, stack_ptr, torch.zeros(feat.size(0),feat.size(1),1).to(feat.device))
         stack_ptr = _move_ptr_bw(stack_ptr)
         att1 = _read_from_stack(att_stack, stack_ptr)
         att_out = torch.min(att1, att2)
         att_stack = _write_to_stack(att_stack, stack_ptr, att_out)
-        return att_stack, stack_ptr, self.mem_zero.to(feat.device)
+        return att_stack, stack_ptr, mem_in.clone().zero_() 
 
 
 class FindModule(nn.Module):
 
-    def __init__(self, dim_v):
+    def __init__(self, **kwargs):
         super().__init__()
-        self.attendNode = AttendNodeModule()
-        self.transConn = TransConnectModule()
-        self.mem_zero = torch.zeros(1, dim_v)
+        self.map_c = nn.Linear(kwargs['dim_hidden'], kwargs['dim_v'])
+        self.x_conv = nn.Linear(kwargs['dim_v'], kwargs['glimpses'])
+        self.drop = nn.Dropout(kwargs['dropout_prob'])
+        self.fusion = Fusion()
+        
 
-    def forward(self, cat_matrix, conn_matrix, edge_cat_vectors, feat, c_i, att_stack, stack_ptr, mem_in):
+    def forward(self, vision_feat, feat, feat_edge, c_i, relation_mask, att_stack, stack_ptr, mem_in):
+        query = self.map_c(self.drop(c_i)).unsqueeze(1) # (batch_size, 1, dim_v)
+        x = self.fusion(feat, query)
+        att_out = self.x_conv(self.drop(x)) # (batch_size, num_feat, glimpse)
+        att_out = F.softmax(att_out, dim=1)  # (batch_size, num_feat, glimpse)
         stack_ptr = _move_ptr_fw(stack_ptr)
-        attribute_att = self.attendNode(feat, c_i)
-        att_out = self.transConn(attribute_att, conn_matrix) # (att_dim, )
-        att_out = att_out.view(1, -1, 1) #(batch_size, att_dim, 1)
         att_stack = _write_to_stack(att_stack, stack_ptr, att_out)
-        return att_stack, stack_ptr, self.mem_zero.to(feat.device)
+        return att_stack, stack_ptr, mem_in.clone().zero_()
 
 
 class FilterModule(nn.Module):
-    def __init__(self, dim_v):
+    def __init__(self, **kwargs):
         super().__init__()
-        self.Find = FindModule(dim_v)
-        self.And = AndModule(dim_v)
-        self.mem_zero = torch.zeros(1, dim_v)
+        self.Find = FindModule(**kwargs)
+        self.And = AndModule(**kwargs)
 
-    def forward(self, cat_matrix, conn_matrix, edge_cat_vectors, feat, c_i, att_stack, stack_ptr, mem_in):
-        att_stack, stack_ptr, _ = self.Find(cat_matrix, conn_matrix, edge_cat_vectors, feat, c_i, att_stack, stack_ptr, mem_in)
-        att_stack, stack_ptr, _ = self.And(cat_matrix, conn_matrix, edge_cat_vectors, feat, c_i, att_stack, stack_ptr, mem_in)
-        return att_stack, stack_ptr, self.mem_zero.to(feat.device)
-
+    def forward(self, vision_feat, feat, feat_edge, c_i, relation_mask, att_stack, stack_ptr, mem_in):
+        att_stack, stack_ptr, _ = self.Find(vision_feat, feat, feat_edge, c_i, relation_mask, att_stack, stack_ptr, mem_in)
+        att_stack, stack_ptr, _ = self.And(vision_feat, feat, feat_edge, c_i, relation_mask, att_stack, stack_ptr, mem_in)
+        return att_stack, stack_ptr, mem_in.clone().zero_()
 
 
 class TransformModule(nn.Module):
 
-    def __init__(self, dim_v):
+    def __init__(self, **kwargs):
         super().__init__()
-        self.attendEdge = AttendEdgeModule()
-        self.transWeit = TransWeightModule()
-        self.mem_zero = torch.zeros(1, dim_v)
+        self.map_c = nn.Linear(kwargs['dim_hidden'], kwargs['dim_edge'])
+        self.map_weight = nn.Linear(kwargs['dim_edge'], 1)
+        self.glimpses = kwargs['glimpses']
 
-    def forward(self, cat_matrix, conn_matrix, edge_cat_vectors, feat, c_i, att_stack, stack_ptr, mem_in):
-        att_in = _read_from_stack(att_stack, stack_ptr)
-        weit_matrix = self.attendEdge(edge_cat_vectors, c_i, cat_matrix)
-        att_out = self.transWeit(att_in.view(1,-1), weit_matrix)
-        att_out = att_out.view(1, -1, 1) #(batch_size, att_dim, 1)
+    def forward(self, vision_feat, feat, feat_edge, c_i, relation_mask, att_stack, stack_ptr, mem_in):
+        batch_size = feat_edge.size(0)
+        query = self.map_c(c_i).view(batch_size, 1, 1, -1).expand_as(feat_edge)
+        elt_prod = query * feat_edge
+        weit_matrix = F.sigmoid(torch.sum(elt_prod, dim=3))
+        weit_matrix = weit_matrix * relation_mask.float()
+        att_in = _read_from_stack(att_stack, stack_ptr).permute(0,2,1) #(batch_size, glimpse, att_dim)
+        att_out = torch.matmul(att_in, weit_matrix).permute(0,2,1) #(batch_size, att_dim, glimpse)
+        norm = torch.max(att_out, dim=1, keepdim=True)[0].detach()
+        norm[norm<=1] = 1
+        att_out /= norm
+        # ---------
         att_stack = _write_to_stack(att_stack, stack_ptr, att_out)
-        return att_stack, stack_ptr, self.mem_zero.to(feat.device)
+        return att_stack, stack_ptr, mem_in.clone().zero_()
 
-class _MutedTransformModule(nn.Module):
-
-    def __init__(self, dim_v):
-        super().__init__()
-        self.attendEdge = AttendEdgeModule()
-        self.transWeit = TransWeightModule()
-
-    def forward(self, cat_matrix, conn_matrix, edge_cat_vectors, feat, c_i, att_stack, stack_ptr, mem_in):
-        att_in = _read_from_stack(att_stack, stack_ptr)
-        weit_matrix = self.attendEdge(edge_cat_vectors, c_i, cat_matrix)
-        att_out = self.transWeit(att_in.view(1,-1), weit_matrix)
-        return att_out
 
 class DescribeModule(nn.Module):
 
-    def __init__(self, dim_v):
+    def __init__(self, **kwargs):
         super().__init__()
-        self.projection = nn.Sequential(
-                nn.Linear(1, 128),
-                nn.ReLU(),
-                nn.Linear(128, dim_v)
-                )
-        self.fc_gate = nn.Sequential(
-                nn.Linear(dim_v, 3),
-                nn.Softmax(dim=0) # c_i is (dim_v,)
-            )
-        for layer in chain(self.projection, self.fc_gate):
-            if isinstance(layer, nn.Linear):
-                nn.init.kaiming_normal_(layer.weight)
-                nn.init.constant_(layer.bias, val=0)
-        self.transform = _MutedTransformModule(dim_v)
 
-    def forward(self, cat_matrix, conn_matrix, edge_cat_vectors, feat, c_i, att_stack, stack_ptr, mem_in):
-        att_in = _read_from_stack(att_stack, stack_ptr).view(1,-1)
-        mem_out_1 = self.projection(torch.sum(att_in, dim=1, keepdim=True))
-        attribute_att = self.transform(cat_matrix, conn_matrix, edge_cat_vectors, feat, c_i, att_stack, stack_ptr, mem_in)
-        mem_out_2 = torch.matmul(attribute_att, feat)
-        att_stack = _write_to_stack(att_stack, stack_ptr, torch.zeros(1,feat.size(0),1).to(feat.device))
-
-        out_weight = self.fc_gate(c_i) # (3,)
-        out_cat = torch.cat([mem_in, mem_out_1, mem_out_2], dim=0) # (3, dim_v)
-        mem_out = torch.matmul(out_weight, out_cat).view(1,-1) # (1, dim_v)
+    def forward(self, vision_feat, feat, feat_edge, c_i, relation_mask, att_stack, stack_ptr, mem_in):
+        batch_size = feat.size(0)
+        mem_out, div = None, None
+        for i in range(att_stack.size(3)):
+            att_in = att_stack[:,:,:,i].permute(0,2,1) #(batch_size, glimpse, att_dim)
+            out = torch.bmm(att_in, vision_feat) # (batch_size, glimpse, dim_vision)
+            mem_out = out if mem_out is None else mem_out + out
+            weight = att_in.sum(dim=2, keepdim=True) # (batch_size, glimpse, 1)
+            div = weight if div is None else div + weight
+        div = div.detach()
+        div[div == 0] = 1
+        mem_out = mem_out / div
+        mem_out = mem_out.view(batch_size, -1) #(batch_size, glimpse*dim_vision)
         return att_stack, stack_ptr, mem_out
 
 
 
 
 
+class Fusion(nn.Module):
+    """ Crazy multi-modal fusion: negative squared difference minus relu'd sum
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x, y):
+        return - (x - y)**2 + F.relu(x + y)
 
 
 
@@ -193,10 +183,10 @@ def _read_from_stack(att_stack, stack_ptr):
     Read the value at the given stack pointer.
     """
     batch_size, stack_len = stack_ptr.size()
-    stack_ptr_expand = stack_ptr.view(batch_size, 1, stack_len)
+    stack_ptr_expand = stack_ptr.view(batch_size, 1, 1, stack_len)
     # The stack pointer is a one-hot vector, so just do dot product
-    att = torch.sum(att_stack * stack_ptr_expand, dim=-1, keepdim=True)
-    return att # (batch_size, att_dim, 1)
+    att = torch.sum(att_stack * stack_ptr_expand, dim=-1)
+    return att # (batch_size, att_dim, glimpse)
 
 
 def _write_to_stack(att_stack, stack_ptr, att):
@@ -205,9 +195,11 @@ def _write_to_stack(att_stack, stack_ptr, att):
     result needs to be assigned back to att_stack
     """
     batch_size, stack_len = stack_ptr.size()
-    stack_ptr_expand = stack_ptr.view(batch_size, 1, stack_len)
+    stack_ptr_expand = stack_ptr.view(batch_size, 1, 1, stack_len)
+    if att.dim() == 3:
+        att = att.unsqueeze(3)
     att_stack = att * stack_ptr_expand + att_stack * (1 - stack_ptr_expand)
-    return att_stack # (batch_size, att_dim, stack_len)
+    return att_stack # (batch_size, att_dim, glimpse, stack_len)
 
 
 def _sharpen_ptr(stack_ptr, hard):
@@ -222,8 +214,8 @@ def _sharpen_ptr(stack_ptr, hard):
         new_stack_ptr = convert_to_one_hot(new_stack_ptr_indices, stack_len)
     else:
         # soft (differentiable) sharpening with softmax
-        temperature = 10
-        new_stack_ptr = F.softmax(stack_ptr / temperature)
+        temperature = 0.1
+        new_stack_ptr = F.softmax(stack_ptr / temperature, dim=1)
     return new_stack_ptr
 
 

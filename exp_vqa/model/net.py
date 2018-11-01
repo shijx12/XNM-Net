@@ -4,9 +4,8 @@ from torch.nn import functional as F
 import numpy as np
 from itertools import chain
 
-from . import basic_modules
 from . import composite_modules as modules
-from .AttentionSeq2Seq import EncoderRNN
+from .AttentionSeq2Seq import BiGRUEncoder 
 from IPython import embed
 
 
@@ -15,6 +14,7 @@ class XNMNet(nn.Module):
         """         
             vocab,
             dim_v, # word, vertex and edge embedding of scene graph
+            dim_edge,
             dim_hidden, # hidden of seq2seq
             dim_vision,
             dropout_prob,
@@ -48,18 +48,20 @@ class XNMNet(nn.Module):
             glimpses=glimpses,
             drop=self.dropout_prob,
             )
-        self.map_word_to_v = nn.Sequential(
-                nn.Linear(self.dim_word, self.dim_v),
-                nn.ReLU(),
-                )
         self.map_vision_to_v = nn.Sequential(
                 nn.Linear(self.dim_vision, self.dim_v),
                 nn.Tanh(),
                 )
-        self.map_two_edge_to_v = nn.Sequential(
-                nn.Linear(self.dim_v * 2, 1024),
-                nn.ReLU(),
-                nn.Linear(1024, self.dim_v),
+        self.map_word_to_v = nn.Sequential(
+                nn.Linear(self.dim_hidden, self.dim_v),
+                nn.Tanh(),
+                )
+        self.map_word_to_edge = nn.Sequential(
+                nn.Linear(self.dim_hidden, self.dim_edge),
+                nn.Tanh(),
+                )
+        self.map_two_v_to_edge = nn.Sequential(
+                nn.Linear(self.dim_v * 2, self.dim_edge),
                 nn.Tanh(),
                 )
         # question+attribute+relation tokens. 0 for <NULL>
@@ -80,12 +82,14 @@ class XNMNet(nn.Module):
             self.function_modules[module_name] = module
             self.add_module(module_name, module)
 
-        self.question_encoder = EncoderRNN(self.num_token, self.dim_hidden, self.dim_word)
+        self.question_encoder = BiGRUEncoder(self.dim_word, self.dim_hidden) 
         self.att_func_list = []
-        for i in range(3):
+        for i in range(len(self.program_scheme)):
             self.att_func_list.append(
                     nn.Sequential(
-                        nn.Linear(self.dim_word, 256),
+                        nn.Linear(self.dim_hidden, 512),
+                        nn.ReLU(),
+                        nn.Linear(512, 256),
                         nn.ReLU(),
                         nn.Linear(256, 1)
                         )
@@ -99,138 +103,67 @@ class XNMNet(nn.Module):
         nn.init.normal_(self.token_embedding.weight, mean=0, std=1/np.sqrt(self.dim_word))
 
 
-    def forward(self, questions, questions_len, vision_feat):
+    def forward(self, questions, questions_len, vision_feat, relation_mask, debug=False):
         """
         Args:
             questions [Tensor] (batch_size, seq_len)
             questions_len [Tensor] (batch_size)
         """
-        batch_size = len(questions)
+        batch_size, seq_len = questions.size()
         questions = questions.permute(1, 0) # (seq_len, batch_size)
-        gt_programs = torch.zeros(batch_size, len(self.program_scheme)+1).to(self.device)
-        for i, m in enumerate(self.program_scheme):
-            gt_programs[:,i] = self.vocab['program_token_to_idx'][m]
-        self.token_embedding.weight[0].data.zero_()
         questions_embedding = self.token_embedding(questions) # (seq_len, batch_size, dim_word)
         questions_embedding = torch.tanh(self.dropout(questions_embedding))
-        feat_inputs = self.map_vision_to_v(vision_feat.permute(0,2,1))
+        questions_hidden, questions_outputs = self.question_encoder(questions, questions_embedding, questions_len)
+        ## feature processing
+        vision_feat = vision_feat / (vision_feat.norm(p=2, dim=1, keepdim=True) + 1e-12)
+        feat_inputs = self.map_vision_to_v(vision_feat.permute(0,2,1)) # (batch_size, num_feat, dim_v)
+        num_feat = feat_inputs.size(1)
+        feat_inputs_expand_0 = feat_inputs.unsqueeze(1).expand(batch_size, num_feat, num_feat, self.dim_v)
+        feat_inputs_expand_1 = feat_inputs.unsqueeze(2).expand(batch_size, num_feat, num_feat, self.dim_v)
+        feat_edge = torch.cat([feat_inputs_expand_0, feat_inputs_expand_1], dim=3) # (bs, num_feat, num_feat, 2*dim_v)
+        feat_edge = self.map_two_v_to_edge(feat_edge)
 
-        module_outputs = []
-        for n in range(batch_size):
-            feat_input = feat_inputs[n]
-            num_node = len(feat_input)
-            feat_input_expand_0 = feat_input.unsqueeze(0).expand(num_node, num_node, self.dim_v)
-            feat_input_expand_1 = feat_input.unsqueeze(1).expand(num_node, num_node, self.dim_v)
-            feat_edge = torch.cat([feat_input_expand_0, feat_input_expand_1], dim=2) # (num_node, num_node, 2*dim_v)
-            feat_edge = self.map_two_edge_to_v(feat_edge)
+        output = torch.ones(batch_size, num_feat).to(self.device)
+        for i, module_type in enumerate(self.program_scheme):
+            #### module input
+            question_logit = self.att_func_list[i](questions_outputs).squeeze(2)
+            mask = np.ones((seq_len, batch_size))
+            for j in range(batch_size):
+                mask[0:questions_len[j], j] = 0
+            mask_tensor = torch.ByteTensor(mask).to(self.device)
+            question_logit.data.masked_fill_(mask_tensor, -float('inf'))
+            question_att = nn.functional.softmax(question_logit, dim=0) #(seq_len, bsz)
+            query = torch.matmul(question_att.permute(1,0).unsqueeze(1), questions_outputs.permute(1,0,2)).squeeze(1) #(bsz, dim_word)
+            ####
 
-            output = torch.ones(num_node).to(self.device)
-            for i in range(len(gt_programs[n])): # NOTE: programs are reverted pre-order
-                module_type = self.vocab['program_idx_to_token'][gt_programs[n, i].item()]
-                if module_type in {'<eos>'}: # quit 
-                    break
-                #### module input
-                question_logit = self.att_func_list[i](questions_embedding[:,n,:]).squeeze()
-                mask = np.ones(question_logit.size(0))
-                mask[0:questions_len[n]] = 0
-                mask_tensor = torch.ByteTensor(mask).to(self.device)
-                question_logit.data.masked_fill_(mask_tensor, -float('inf'))
-                question_att = nn.functional.softmax(question_logit, dim=0) #(seq_len, )
-                query = torch.matmul(question_att, questions_embedding[:,n,:]) #(dim_word, )
-                query = self.map_word_to_v(query) #(dim_v, )
-                ####
-
-                module = self.function_modules[module_type]
-                if module_type == 'relate':
-                    output = module(output, feat_edge, query)
-                else:
-                    output = module(output, feat_input, query)
-            module_outputs.append(output)
+            module = self.function_modules[module_type]
+            output = module(output, feat_inputs, feat_edge, query, relation_mask)
+            if debug:
+                print(module_type)
+                for k in range(questions_len[0].item()):
+                    w = self.vocab['question_idx_to_token'][questions[k,0].item()]
+                    a = question_att[k,0].item()
+                    print('{}: {:.4f}'.format(w, a))
+                embed()
         
-        ## Part 1. features from scene graph module network. (batch, dim_v)
-        module_outputs = torch.stack(module_outputs)
+        ## Part 1. features from scene graph module network. (batch, dim_v+dim_vision)
+        module_outputs = output 
         ## Part 2. question prior. (batch, dim_hidden)
-        questions_hidden = self.question_encoder(questions, questions_embedding, questions_len)
+        questions_hidden = questions_hidden
         ## Part 3. bottom-up vision features. (batch, glimpses * dim_vision)
         if vision_feat.dim() == 3:
             vision_feat = vision_feat.unsqueeze(2) # (batch, dim_vision, 1, num_feat)
-        vision_feat = vision_feat / (vision_feat.norm(p=2, dim=1, keepdim=True) + 1e-12)
-        a = self.visionAttention(vision_feat, questions_hidden)
-        vision_feat = apply_attention(vision_feat, a)
+        if 'v' in self.class_mode:
+            a = self.visionAttention(vision_feat, questions_hidden)
+            vision_feat = apply_attention(vision_feat, a)
+        else:
+            vision_feat = None
 
         ##### final prediction
-        predicted_logits = self.classifier(vision_feat, questions_hidden, module_outputs)
+        predicted_logits = self.classifier(vision_feat, questions_hidden, module_outputs, debug)
         others = {
         }
         return predicted_logits, others
-
-
-    def forward_and_return_intermediates(self, questions, questions_len, conn_matrixes, cat_matrixes, v_indexes, e_indexes, vision_feat):
-
-        assert len(v_indexes) == 1, 'only support intermediates of batch size 1'
-        intermediates = []
-
-        batch_size = len(v_indexes)
-        questions = questions.permute(1, 0) # (seq_len, batch_size)
-        gt_programs = torch.zeros(batch_size, len(self.program_scheme)+1).to(self.device)
-        for i, m in enumerate(self.program_scheme):
-            gt_programs[:,i] = self.vocab['program_token_to_idx'][m]
-        questions_embedding = self.token_embedding(questions)
-        questions_embedding = torch.tanh(self.dropout(questions_embedding))
-
-        n = 0
-        edge_cat_vectors = self.map_word_to_v(self.token_embedding(e_indexes[n])) # (num_current_edge, dim_v)
-        output = None
-        feat_input = self.map_word_to_v(self.token_embedding(v_indexes[n]))
-        for i in range(len(gt_programs[n])): # NOTE: programs are reverted pre-order
-            module_type = self.vocab['program_idx_to_token'][gt_programs[n, i].item()]
-            if module_type in {'<eos>'}:
-                break  # quit 
-            question_logit = self.att_func_list[i](questions_embedding[:,n,:]).squeeze()
-            mask = np.ones(question_logit.size(0))
-            mask[0:questions_len[n]] = 0
-            mask_tensor = torch.ByteTensor(mask).to(self.device)
-            question_logit.data.masked_fill_(mask_tensor, -float('inf'))
-            question_att = nn.functional.softmax(question_logit, dim=0) #(seq_len, )
-            query = torch.matmul(question_att, questions_embedding[:,n,:]) #(dim_word, )
-            query = self.map_word_to_v(query) #(dim_v, )
-
-            module = self.function_modules[module_type]
-            if module_type == 'describe':
-                output = module(output, query, feat_input)
-            elif module_type == 'find':
-                output = module(conn_matrixes[n], feat_input, query)
-            elif module_type == 'relate':
-                output = module(output, cat_matrixes[n], edge_cat_vectors, query)
-
-            question_attention_str = ''
-            for j in range(questions_len[n].item()):
-                word = self.vocab['question_idx_to_token'][questions[j,n].item()]
-                weight = question_att[j].item()
-                question_attention_str += '%s-%.2f ' % (word, weight)
-            vertex_weight =None
-            if module_type in {'find', 'relate'}:
-                vertex_weight = output.data.cpu().numpy()
-            intermediates.append((
-                    module_type + ':::' + question_attention_str, # question attention heatmap
-                    vertex_weight, # vertex attention vector
-                ))
-
-        ## Part 1. features from scene graph module network. (batch, dim_v)
-        module_outputs = output.view(1, -1)
-        ## Part 2. question prior. (batch, dim_hidden)
-        questions_hidden = self.question_encoder(questions, questions_embedding, questions_len)
-        ## Part 3. bottom-up vision features. (batch, glimpses * dim_vision)
-        if vision_feat.dim() == 3:
-            vision_feat = vision_feat.unsqueeze(2) # (batch, dim_vision, 1, num_feat)
-        vision_feat = vision_feat / (vision_feat.norm(p=2, dim=1, keepdim=True) + 1e-12)
-        a = self.visionAttention(vision_feat, questions_hidden)
-        vision_feat = apply_attention(vision_feat, a)
-
-        ##### final prediction
-        predicted_logits = self.classifier(vision_feat, questions_hidden, module_outputs)
-        pred = predicted_logits.squeeze().max(0)[1]
-        return (self.vocab['answer_idx_to_token'][pred.item()], intermediates)
 
 
 
@@ -262,15 +195,26 @@ class Classifier(nn.Sequential):
         self.lin_c = nn.Linear(count_features, mid_features)
         self.bn = nn.BatchNorm1d(mid_features)
         self.bn2 = nn.BatchNorm1d(mid_features)
+        self.elt_gate = nn.Sequential(
+                nn.Linear(in_features[1], mid_features),
+                nn.ReLU(),
+                nn.Linear(mid_features, mid_features),
+                nn.Sigmoid()
+                )
 
-    def forward(self, x, y, c):
+    def forward(self, x, y, c, debug=False):
         if self.mode == 'c':
-            x = self.bn2(self.relu(self.lin_c(c)))
+            x = self.bn2(self.relu(self.lin_c(self.drop(c))))
         elif self.mode == 'qv':
             x = self.fusion(self.lin11(self.drop(x)), self.lin12(self.drop(y)))
         elif self.mode == 'qvc':
             x = self.fusion(self.lin11(self.drop(x)), self.lin12(self.drop(y)))
-            x = x + self.bn2(self.relu(self.lin_c(c)))
+            c = self.bn2(self.relu(self.lin_c(self.drop(c))))
+            #x = x + c
+            g = self.elt_gate(y)
+            x = g * x + (1-g) * c
+            if debug:
+                print(g.detach().cpu().numpy().tolist()[:10])
         x = self.lin2(self.drop(self.bn(x)))
         return x
 
