@@ -7,7 +7,6 @@ import numpy as np
 import argparse
 import shutil
 import copy
-from tensorboardX import SummaryWriter
 
 from DataLoader import ClevrDataLoader
 from model.net import XNMNet
@@ -29,6 +28,7 @@ def train(args):
         'vocab_json': args.vocab_json,
         'batch_size': args.batch_size,
         'edge_class': args.edge_class,
+        'ratio': args.ratio,
         'shuffle': True,
     }
     val_loader_kwargs = {
@@ -54,10 +54,9 @@ def train(args):
     logging.info(model)
 
     optimizer = optim.Adam(model.parameters(), args.lr, weight_decay=args.l2reg)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=[args.lr_decay10_stone], gamma=0.1)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=[int(1/args.ratio)], gamma=0.1)
     criterion = nn.CrossEntropyLoss().to(device)
     logging.info("Start training........")
-    writer = SummaryWriter(os.path.join(args.save_dir, 'log'))
     iter_count = 0
     for epoch in range(args.num_epoch):
         for i, batch in enumerate(train_loader):
@@ -66,26 +65,19 @@ def train(args):
             answers, questions, *batch_input = [todevice(x, device) for x in batch]
             logits, others = model(*batch_input)
             loss = criterion(logits, answers)
-            regular = torch.abs(torch.eye(args.num_edge_cat).to(device) - torch.matmul(model.edge_cat_vectors, model.edge_cat_vectors.t())).sum()
-            loss += args.regular_weight * others['entropy']
-            loss += args.regular_weight * regular
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            if (i+1) % (len(train_loader) // 100) == 0:
+            if (i+1) % (len(train_loader) // 10) == 0:
                 logging.info("Progress %.3f  loss = %.3f" % (progress, loss.item()))
-            if (i+1) % (len(train_loader)) == 0:
-                for name, param in model.named_parameters():
-                    writer.add_histogram(name, param, iter_count)
-                    if param.grad is not None:
-                        writer.add_histogram(name+'/grad', param.grad, iter_count)
         scheduler.step()
-        valid_acc = validate(model, val_loader, device)
-        logging.info('\n ~~~~~~ Valid Accuracy: %.3f ~~~~~~~\n' % valid_acc)
+        if (epoch+1) % 10 == 0:
+            valid_acc = validate(model, val_loader, device)
+            logging.info('\n ~~~~~~ Valid Accuracy: %.3f ~~~~~~~\n' % valid_acc)
 
-        save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, os.path.join(args.save_dir, 'model.pt')) 
-        logging.info(' >>>>>> save to %s <<<<<<' % (args.save_dir))
+            save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, os.path.join(args.save_dir, 'model.pt')) 
+            logging.info(' >>>>>> save to %s <<<<<<' % (args.save_dir))
 
 
 def save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, filename):
@@ -111,12 +103,11 @@ def main():
     parser.add_argument('--vocab_json', default='vocab.json')
     # training parameters
     parser.add_argument('--lr', default=0.001, type=float)
-    parser.add_argument('--lr_decay10_stone', default=1, type=int)
     parser.add_argument('--l2reg', default=5e-6, type=float)
     parser.add_argument('--num_epoch', default=10, type=int)
-    parser.add_argument('--batch_size', default=128, type=int)
-    parser.add_argument('--regular_weight', default=0.0001, type=float)
+    parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
+    parser.add_argument('--ratio', default=1, type=float, help='ratio of training examples')
     # model hyperparameters
     parser.add_argument('--dim_v', default=128, type=int)
     parser.add_argument('--dim_feature', default=512, type=int)
@@ -124,7 +115,7 @@ def main():
     parser.add_argument('--k_attr', default=4, type=int)
     parser.add_argument('--num_edge_cat', default=5, type=int)
     parser.add_argument('--num_class', default=28, type=int)
-    parser.add_argument('--edge_class', choices=['rule', 'learncat'], default='rule')
+    parser.add_argument('--edge_class', choices=['rule', 'learncat', 'dense'], default='dense')
     args = parser.parse_args()
 
     # make logging.info display into both shell and file

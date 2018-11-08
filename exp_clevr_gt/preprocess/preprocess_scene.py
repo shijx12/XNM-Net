@@ -102,7 +102,7 @@ def get_descriptions(objects, relations):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-scene', required=True, help='scene graph json file')
-    parser.add_argument('--output-vocab-json', required=True, help='output vocab file')
+    parser.add_argument('--vocab-json', required=True, help='vocab file')
     parser.add_argument('--output-scene', required=True, help='output file')
     args = parser.parse_args()
 
@@ -114,13 +114,13 @@ def main():
     vocab = {
         'edge_token_to_idx': edge_wtoi,
     }
-    if args.output_vocab_json:
-        if os.path.exists(args.output_vocab_json):
-            old_vocab = json.load(open(args.output_vocab_json))
+    if args.vocab_json:
+        if os.path.exists(args.vocab_json):
+            old_vocab = json.load(open(args.vocab_json))
             vocab.update(old_vocab)
             print("Update existed vocab")
-        print("Write vocab to %s" % args.output_vocab_json)
-        with open(args.output_vocab_json, 'w') as f:
+        print("Write vocab to %s" % args.vocab_json)
+        with open(args.vocab_json, 'w') as f:
             json.dump(vocab, f, indent=4)
 
     print('Construct')

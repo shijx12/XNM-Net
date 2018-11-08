@@ -48,7 +48,7 @@ def vqa_collate(batch):
 
 class ClevrDataset(Dataset):
 
-    def __init__(self, questions, image_indices, programs, program_inputs, answers, features, edge_class):
+    def __init__(self, questions, image_indices, programs, program_inputs, answers, features, edge_class, idx_cache, coord_cache):
         # convert data to tensor
         self.all_questions = torch.LongTensor(np.asarray(questions))
         self.all_image_idxs = torch.LongTensor(np.asarray(image_indices))
@@ -57,6 +57,8 @@ class ClevrDataset(Dataset):
         self.all_answers = torch.LongTensor(np.asarray(answers))
         self.features = features
         self.edge_class = edge_class
+        self.idx_cache = idx_cache
+        self.coord_cache = coord_cache
 
     def __getitem__(self, index):
         question = self.all_questions[index]
@@ -66,7 +68,7 @@ class ClevrDataset(Dataset):
         answer = self.all_answers[index]
         assert program_seq.size(0) == program_input.size(0), "program and program_input must have the same length"
 
-        feature, coord = self.features[image_idx]['feature'], self.features[image_idx]['coord']
+        feature, coord = self.features[image_idx]['feature'], self.features[image_idx]['coord'][:,:2]
         feature = torch.FloatTensor(feature)
         num_obj = len(coord)
         edge_vector = np.zeros((num_obj, num_obj, 2))
@@ -90,13 +92,14 @@ class ClevrDataset(Dataset):
                     elif edge_vector[i,j,1] == 1:
                         edge_vector[i,j,1] = 4 # left
             edge_vector = torch.LongTensor(edge_vector)
-        elif self.edge_class == 'learncat':
+        elif self.edge_class == 'learncat' or self.edge_class == 'dense':
             for i in range(num_obj):
                 for j in range(num_obj):
                     edge_vector[i,j] = coord[i] - coord[j]
             edge_vector = torch.FloatTensor(edge_vector)
-        #print(image_idx)
 
+        self.idx_cache[0] = image_idx
+        self.coord_cache[0] = coord
         return (answer, question, program_seq, program_input, feature, edge_vector)
 
     def __len__(self):
@@ -150,8 +153,22 @@ class ClevrDataLoader(DataLoader):
             programs = obj['programs']
             program_inputs = obj['program_inputs']
             answers = obj['answers']
-        edge_class = kwargs.pop('edge_class') 
-        dataset = ClevrDataset(questions, image_indices, programs, program_inputs, answers, features, edge_class)
+
+        self.ratio = None
+        if 'ratio' in kwargs:
+            self.ratio = kwargs.pop('ratio')
+            total = int(len(questions) * self.ratio)
+            print('training ratio = %.3f, containing %d questions' % (self.ratio, total))
+            questions = questions[:total]
+            image_indices = image_indices[:total]
+            programs = programs[:total]
+            program_inputs = program_inputs[:total]
+            answers = answers[:total]
+
+        self.idx_cache, self.coord_cache = [0], [0]
+        edge_class = kwargs.pop('edge_class')
+        dataset = ClevrDataset(questions, image_indices, programs, program_inputs, answers, features, edge_class, 
+                               self.idx_cache, self.coord_cache)
         kwargs['collate_fn'] = vqa_collate   
         super().__init__(dataset, **kwargs)
         self.vocab = vocab

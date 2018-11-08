@@ -34,6 +34,12 @@ class XNMNet(nn.Module):
                 nn.Linear(self.dim_v, self.num_edge_cat),
                 nn.Softmax(dim=2), # (num_node, num_node, num_edge_cat)
             )
+        elif self.edge_class == 'dense':
+            self.map_edge_to_v = nn.Sequential(
+                nn.Linear(self.dim_edge, 300),
+                nn.ReLU(),
+                nn.Linear(300, self.dim_v),
+            )
 
         self.edge_cat_vectors = nn.Parameter(torch.zeros(self.num_edge_cat, self.dim_v)) # null, left, right, front, behind
         nn.init.normal_(self.edge_cat_vectors.data, mean=0, std=1/math.sqrt(self.dim_v))
@@ -100,7 +106,6 @@ class XNMNet(nn.Module):
         device = programs[0].device
 
         final_module_outputs = []
-        entropies = []
         for n in range(batch_size):
             feature = self.map_feature_to_v(features[n])
             num_node = feature.size(0)
@@ -108,6 +113,8 @@ class XNMNet(nn.Module):
             edge_vector = edge_vectors[n] # (num_node, num_node, 2)
             if self.edge_class == 'learncat':
                 edge_vector = self.map_edge_to_class(edge_vector) # (num_node, num_node, num_edge_cat)
+            elif self.edge_class == 'dense':
+                edge_vector = self.map_edge_to_v(edge_vector) # (num_node, num_node, dim_v)
 
             saved_output, output = None, None
             try:
@@ -131,8 +138,7 @@ class XNMNet(nn.Module):
                         output = module(output, saved_output)  # these modules take two feature maps
                     elif module_type in {'relate'}:
                         # output = module(output, feature, query, edge_vector)
-                        output, entropy = module(output, feature, query, self.edge_cat_vectors, edge_vector)
-                        entropies.append(entropy)
+                        output = module(output, feature, query, self.edge_cat_vectors, edge_vector)
                     else:
                         output = module(output, feature, query)
             except Exception as e:
@@ -145,7 +151,6 @@ class XNMNet(nn.Module):
             
         final_module_outputs = torch.stack(final_module_outputs)
         others = {
-                'entropy': torch.mean(torch.stack(entropies)) if len(entropies)>0 else 0
                 }
         return self.classifier(final_module_outputs), others
 
@@ -159,8 +164,11 @@ class XNMNet(nn.Module):
         n = 0
         feature = self.map_feature_to_v(features[n])  # (num_node, dim_v)
         num_node = feature.size(0)
-        # edge_vector = self.map_edge_to_v(edge_vectors[n]) # (num_node, num_node, dim_v)
         edge_vector = edge_vectors[n] # (num_node, num_node, 2)
+        if self.edge_class == 'learncat':
+            edge_vector = self.map_edge_to_class(edge_vector) # (num_node, num_node, num_edge_cat)
+        elif self.edge_class == 'dense':
+            edge_vector = self.map_edge_to_v(edge_vector) # (num_node, num_node, dim_v)
 
         saved_output, output = None, None
         for i in range(-1, -len(programs[n])-1, -1):
@@ -183,8 +191,7 @@ class XNMNet(nn.Module):
                         'equal', 'equal_integer', 'less_than', 'greater_than'}:
                 output = module(output, saved_output)  # these modules take two feature maps
             elif module_type in {'relate'}:
-                # output = module(output, feature, query, edge_vector)
-                output, entropy = module(output, feature, query, self.edge_cat_vectors, edge_vector)
+                output = module(output, feature, query, self.edge_cat_vectors, edge_vector)
             else:
                 output = module(output, feature, query)
 

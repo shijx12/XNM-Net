@@ -47,7 +47,7 @@ class SameModule(nn.Module):
         self.attnNot = NotModule()
         
     def forward(self, attn, cat_matrix, edge_cat_vectors, query, conn_matrix):
-        attribute_attn, entropy = self.relate(attn, cat_matrix, edge_cat_vectors, query, None)
+        attribute_attn = self.relate(attn, cat_matrix, edge_cat_vectors, query, None)
         new_object_attn = self.transConn(attribute_attn, conn_matrix)
         # exclude current object
         out = self.attnAnd(self.attnNot(attn), new_object_attn)
@@ -68,14 +68,9 @@ class ExistOrCountModule(nn.Module):
                 nn.ReLU(),
                 nn.Linear(128, dim_v)
                 )
-        for layer in self.projection:
-            if isinstance(layer, nn.Linear):
-                nn.init.kaiming_normal_(layer.weight)
-                nn.init.constant_(layer.bias, val=0)
 
     def forward(self, attn):
         out = self.projection(torch.sum(attn, dim=0, keepdim=True)) 
-        # TODO: other strategies? maps variable-length attn to fixed-length encoding
         return out
 
 
@@ -102,9 +97,9 @@ class RelateModule(nn.Module):
         Returns:
             new attention
         """
-        weit_matrix, entropy = self.attendEdge(edge_cat_vectors, query, cat_matrix)
+        weit_matrix = self.attendEdge(edge_cat_vectors, query, cat_matrix)
         out = self.transWeit(attn, weit_matrix)
-        return out, entropy
+        return out
 
 
 class QueryModule(nn.Module):
@@ -117,9 +112,9 @@ class QueryModule(nn.Module):
         self.relate = RelateModule()
 
     def forward(self, attn, cat_matrix, edge_cat_vectors, query, feat):
-        attribute_attn, entropy = self.relate(attn, cat_matrix, edge_cat_vectors, query, None)
+        attribute_attn = self.relate(attn, cat_matrix, edge_cat_vectors, query, None)
         out = torch.matmul(attribute_attn, feat)
-        return out, entropy # (dim_v, )
+        return out # (dim_v, )
 
 
 class ComparisonModule(nn.Module):
@@ -135,10 +130,6 @@ class ComparisonModule(nn.Module):
                 nn.ReLU(),
                 nn.Linear(256, dim_v)
             )
-        for layer in self.projection:
-            if isinstance(layer, nn.Linear):
-                nn.init.kaiming_normal_(layer.weight)
-                nn.init.constant_(layer.bias, val=0)
 
     def forward(self, enc1, enc2):
         input = enc1 - enc2

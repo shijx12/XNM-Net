@@ -8,7 +8,7 @@ import argparse
 import time
 import os
 import shutil
-from tensorboardX import SummaryWriter
+import copy
 from IPython import embed
 
 from DataLoader import ClevrDataLoader
@@ -29,6 +29,7 @@ def train(args):
         'scene_pt': args.train_scene_pt,
         'vocab_json': args.vocab_json,
         'batch_size': args.batch_size,
+        'ratio': args.ratio,
         'shuffle': True
     }
     val_loader_kwargs = {
@@ -53,10 +54,9 @@ def train(args):
     logging.info(model)
 
     optimizer = optim.Adam(model.parameters(), args.lr, weight_decay=args.l2reg)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=[1], gamma=0.1)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=[int(1/args.ratio)], gamma=0.1)
     criterion = nn.CrossEntropyLoss().to(device)
     logging.info("Start training........")
-    writer = SummaryWriter(os.path.join(args.save_dir, 'log'))
     tic = time.time()
     iter_count = 0
     for epoch in range(args.num_epoch):
@@ -68,28 +68,27 @@ def train(args):
 
             logits, others = model(*batch_input)
             loss = criterion(logits, answers)
-            regular = torch.abs(torch.eye(args.num_edge_cat).to(device) - torch.matmul(model.edge_cat_vectors, model.edge_cat_vectors.t())).sum()
-            #loss += args.regular_weight * others['entropy']
-            loss += args.regular_weight * regular
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            if (i+1) % (len(train_loader) // 100) == 0:
+            if (i+1) % (len(train_loader) // 10) == 0:
                 logging.info("Progress %.3f  loss = %.3f" % (progress, loss.item()))
         scheduler.step()
-        valid_acc = validate(model, val_loader, device)
-        logging.info('\n ~~~~~~ Valid Accuracy: %.4f ~~~~~~~\n' % valid_acc)
+        if (epoch+1) % 10 == 0:
+            valid_acc = validate(model, val_loader, device)
+            logging.info('\n ~~~~~~ Valid Accuracy: %.4f ~~~~~~~\n' % valid_acc)
 
-        save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, os.path.join(args.save_dir, 'model.pt')) 
-        logging.info(' >>>>>> save to %s <<<<<<' % (args.save_dir))
+            save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, os.path.join(args.save_dir, 'model.pt')) 
+            logging.info(' >>>>>> save to %s <<<<<<' % (args.save_dir))
+
 
 
 def save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, filename):
     state = {
         'epoch': epoch,
         'state_dict': model.state_dict(),
-        'optimizer': optimizer.state_dict()
+        'optimizer': optimizer.state_dict(),
         'model_kwargs': model_kwargs_tosave,
         }
     torch.save(state, filename)
@@ -100,7 +99,7 @@ def main():
     parser = argparse.ArgumentParser()
     # input and output
     parser.add_argument('--save_dir', type=str, required=True, help='path to save checkpoints and logs')
-    parser.add_argument('--input_dir', default='/data/sjx/CLEVR-Exp/data')
+    parser.add_argument('--input_dir', default='/data1/jiaxin/exp/CLEVR/data/')
     parser.add_argument('--train_question_pt', default='train_questions.pt')
     parser.add_argument('--train_scene_pt', default='train_scenes.pt')
     parser.add_argument('--val_question_pt', default='val_questions.pt')
@@ -109,10 +108,10 @@ def main():
     # training parameters
     parser.add_argument('--lr', default=0.001, type=float)
     parser.add_argument('--l2reg', default=0, type=float)
-    parser.add_argument('--num_epoch', default=3, type=int)
-    parser.add_argument('--batch_size', default=128, type=int)
-    parser.add_argument('--regular_weight', default=0.0001, type=float)
+    parser.add_argument('--num_epoch', default=5, type=int)
+    parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
+    parser.add_argument('--ratio', default=1, type=float, help='ratio of training examples')
     # model hyperparameters
     parser.add_argument('--dim_pre_v', default=15, type=int)
     parser.add_argument('--dim_v', default=128, type=int)

@@ -42,12 +42,12 @@ parser.add_argument('--output_vocab_json', default='')
 
 def program_to_strs(program, mode):
   if mode == 'chain':
-    if not iep.programs.is_chain(program):
+    if not programs.is_chain(program):
       return None
   elif mode == 'prefix':
-    program = iep.programs.list_to_prefix(program)
+    program = programs.list_to_prefix(program)
   elif mode == 'postfix':
-    program = iep.programs.list_to_postfix(program)
+    program = programs.list_to_postfix(program)
 
   ######################### convert program and program_inputs ##########################
   for f in program:

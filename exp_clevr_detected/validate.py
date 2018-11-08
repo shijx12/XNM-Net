@@ -13,9 +13,21 @@ from utils.misc import convert_david_program_to_mine, invert_dict, todevice
 from model.net import XNMNet
 from IPython import embed
 
-def validate(model, data, device):
+map_program_to_cat = {
+        'count': 'count',
+        'equal': 'compare attribute',
+        'equal_integer': 'compare number',
+        'exist': 'exist',
+        'greater_than': 'compare number',
+        'less_than': 'compare number',
+        'query': 'query',
+        }
+
+
+def validate(model, data, device, detail=False):
     count, correct = 0, 0
     model.eval()
+    details = { cat:[0,0] for cat in {'count', 'compare number', 'exist', 'query', 'compare attribute'}}
     print('validate...')
     for batch in tqdm(data, total=len(data)):
         answers, questions, *batch_input = [todevice(x, device) for x in batch]
@@ -23,7 +35,21 @@ def validate(model, data, device):
         predicts = logits.max(1)[1]
         correct += torch.eq(predicts, answers).long().sum().item()
         count += answers.size(0)
+        if detail:
+            programs = batch_input[0]
+            for i in range(len(answers)):
+                for j in range(len(programs[i])):
+                    program = data.vocab['program_idx_to_token'][programs[i][j].item()]
+                    if program in ['<NULL>', '<START>', '<END>', '<UNK>', 'unique']:
+                        continue
+                    cat = map_program_to_cat[program]
+                    details[cat][0] += int(predicts[i].item()==answers[i].item())
+                    details[cat][1] += 1
+                    break
     acc = correct / count
+    if detail:
+        details = { k:(v[0]/v[1]) for k,v in details.items() }
+        return acc, details
     return acc
 
 
@@ -31,12 +57,13 @@ def validate_with_david_generated_program(model, data, device, pretrained_dir):
     program_generator = load_program_generator(os.path.join(pretrained_dir, 'program_generator.pt')).to(device)
     david_vocab = json.load(open(os.path.join(pretrained_dir, 'david_vocab.json')))
     david_vocab['program_idx_to_token'] = invert_dict(david_vocab['program_token_to_idx'])
+    details = { cat:[0,0] for cat in {'count', 'compare number', 'exist', 'query', 'compare attribute'}}
 
     count, correct = 0, 0
     model.eval()
     print('validate...')
     for batch in tqdm(data, total=len(data)):
-        answers, questions, programs, program_inputs, features, edge_vectors = [todevice(x, device) for x in batch]
+        answers, questions, gt_programs, gt_program_inputs, features, edge_vectors = [todevice(x, device) for x in batch]
         programs, program_inputs = [], []
         # generate program using david model for each question
         for i in range(questions.size(0)):
@@ -67,8 +94,19 @@ def validate_with_david_generated_program(model, data, device, pretrained_dir):
         predicts = logits.max(1)[1]
         correct += torch.eq(predicts, answers).long().sum().item()
         count += answers.size(0)
+        # details
+        for i in range(len(answers)):
+            for j in range(len(gt_programs[i])):
+                program = data.vocab['program_idx_to_token'][gt_programs[i][j].item()]
+                if program in ['<NULL>', '<START>', '<END>', '<UNK>', 'unique']:
+                    continue
+                cat = map_program_to_cat[program]
+                details[cat][0] += int(predicts[i].item()==answers[i].item())
+                details[cat][1] += 1
+                break
     acc = correct / count
-    return acc
+    details = { k:(v[0]/v[1]) for k,v in details.items() }
+    return acc, details
 
 
 def show_edge_attention(model, data):
@@ -158,6 +196,8 @@ if __name__ == '__main__':
     model_kwargs.update({'vocab': val_loader.vocab})
     model = XNMNet(**model_kwargs).to(device)
     model.load_state_dict(loaded['state_dict'])
+    num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(' ~~~~~~~~~~ num parameters: %d ~~~~~~~~~~~~~' % num_parameters)
 
     if args.mode =='vis':
         show_edge_attention(model, val_loader)
@@ -165,8 +205,10 @@ if __name__ == '__main__':
     elif args.mode == 'val':
         if args.program == 'gt':
             print('validate with **ground truth** program')
-            val_acc = validate(model, val_loader, device)
+            val_acc, val_details = validate(model, val_loader, device, detail=True)
         elif args.program == 'david':
             print('validate with **david predicted** program')
-            val_acc = validate_with_david_generated_program(model, val_loader, device, args.pretrained_dir)
+            val_acc, val_details = validate_with_david_generated_program(model, val_loader, device, args.pretrained_dir)
         print("Validate acc: %.4f" % val_acc)
+        print(json.dumps(val_details, indent=2))
+

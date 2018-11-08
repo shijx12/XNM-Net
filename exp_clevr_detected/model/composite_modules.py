@@ -92,6 +92,8 @@ class RelateModule(nn.Module):
         super().__init__()
         if kwargs['edge_class'] == 'learncat':
             self.attendEdge = AttendLearnedEdgeModule()
+        elif kwargs['edge_class'] == 'dense':
+            self.attendEdge = AttendDenseEdgeModule()
         else:
             self.attendEdge = AttendEdgeModule()
         self.transWeit = TransWeightModule()
@@ -106,9 +108,9 @@ class RelateModule(nn.Module):
         Returns:
             new attention
         """
-        weit_matrix, entropy = self.attendEdge(edge_cat_vectors, query, cat_matrix)
+        weit_matrix = self.attendEdge(edge_cat_vectors, query, cat_matrix)
         out = self.transWeit(attn, weit_matrix)
-        return out, entropy
+        return out
 
 
 class QueryModule(nn.Module):

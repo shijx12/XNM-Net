@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import math
 
 from . import composite_modules as modules
 from . import basic_modules
@@ -14,17 +15,17 @@ class XNMNet(nn.Module):
         # The classifier takes the output of the last module
         # and produces a distribution over answers
         self.classifier = nn.Sequential(
-            nn.Linear(dim_v, 256),
+            nn.Linear(self.dim_v, 256),
             nn.ReLU(),
             nn.Linear(256, self.num_class)
             )
 
         self.edge_cat_vectors = nn.Parameter(torch.Tensor(self.num_edge_cat, self.dim_v))
-        nn.init.normal_(self.edge_cat_vectors.data, mean=0, std=0.01)
+        nn.init.normal_(self.edge_cat_vectors.data, mean=0, std=1/math.sqrt(self.dim_v))
 
         # encode program_input, which must be included in question tokens
         self.word_embedding = nn.Embedding(len(self.vocab['question_token_to_idx']), self.dim_v)
-        nn.init.normal_(self.word_embedding.weight, mean=0, std=0.01)
+        nn.init.normal_(self.word_embedding.weight, mean=0, std=1/math.sqrt(self.dim_v))
 
         # map onehot node representation to feature vectors of dim_v
         self.map_pre_to_v = nn.Sequential(
@@ -34,7 +35,7 @@ class XNMNet(nn.Module):
 
         self.function_modules = {}  # holds our modules
         # go through the vocab and add all the modules to our model
-        for module_name in vocab['program_token_to_idx']:
+        for module_name in self.vocab['program_token_to_idx']:
             if module_name in ['<NULL>', '<START>', '<END>', '<UNK>', 'unique']:
                 continue  # we don't need modules for the placeholders
             
@@ -49,9 +50,9 @@ class XNMNet(nn.Module):
                 module = basic_modules.OrModule()
             elif module_name in {'equal', 'equal_integer', 'less_than', 'greater_than'}:
                 # 'equal_<cat>' are merged into 'equal', <cat> is ignored
-                module = modules.ComparisonModule(dim_v)
+                module = modules.ComparisonModule(self.dim_v)
             elif module_name in {'exist', 'count'}:
-                module = modules.ExistOrCountModule(dim_v)
+                module = modules.ExistOrCountModule(self.dim_v)
             elif module_name == 'query':
                 # 'query_<cat>' are merged into 'query', <cat> is viewed as input
                 module = modules.QueryModule()
@@ -89,7 +90,6 @@ class XNMNet(nn.Module):
         device = programs[0].device
 
         final_module_outputs = []
-        entropies = []
         for n in range(batch_size):
             feat_input = self.map_pre_to_v(pre_v[n])
             num_node = feat_input.size(0)
@@ -117,8 +117,7 @@ class XNMNet(nn.Module):
                     elif module_type in {'exist', 'count'}:
                         output = module(output) # take as input one attention
                     elif module_type in {'query', 'relate'}:
-                        output, entropy = module(output, cat_matrixes[n], self.edge_cat_vectors, query, feat_input)
-                        entropies.append(entropy)
+                        output = module(output, cat_matrixes[n], self.edge_cat_vectors, query, feat_input)
                     elif module_type == 'same':
                         output = module(output, cat_matrixes[n], self.edge_cat_vectors, query, conn_matrixes[n])
                     elif module_type == 'filter':
@@ -134,59 +133,66 @@ class XNMNet(nn.Module):
             final_module_outputs.append(output)
             
         final_module_outputs = torch.stack(final_module_outputs)
+        logits = self.classifier(final_module_outputs)
         others = {
-                'entropy': torch.mean(torch.stack(entropies)) if len(entropies)>0 else 0
                 }
-        return self.classifier(final_module_outputs)
+        return logits, others
 
 
     def forward_and_return_intermediates(self, programs, program_inputs, conn_matrixes, cat_matrixes, pre_v):
-
         assert len(pre_v) == 1, 'only support intermediates of batch size 1'
+        assert not self.training, 'only eval mode is supported'
         device = programs[0].device
         intermediates = []
 
         feat_input = self.map_pre_to_v(pre_v[0])
         num_node = feat_input.size(0)
         saved_output, output = None, None
-        for i in range(-1, -len(programs[0])-1, -1):
-            module_type = self.vocab['program_idx_to_token'][programs[0][i].item()]
-            if module_type in {'<NULL>', '<START>', '<END>', '<UNK>', 'unique'}:
-                continue  # the above are no-ops in our model
-            module_input = program_inputs[0][i] # <NULL> if no input for module
-            query = self.word_embedding(module_input) # used in node or edge attention
+        n = 0
+        try:
+            for i in range(-1, -len(programs[n])-1, -1):
+                module_type = self.vocab['program_idx_to_token'][programs[n][i].item()]
+                if module_type in {'<NULL>', '<START>', '<END>', '<UNK>', 'unique'}:
+                    continue  # the above are no-ops in our model
+                module_input = program_inputs[n][i] # <NULL> if no input for module
+                query = self.word_embedding(module_input) # used in node or edge attention
 
-            module = self.function_modules[module_type]
-            if module_type == 'scene':
-                # store the previous output; it will be needed later
-                # scene is just a flag, performing no computation
-                saved_output = output
-                output = torch.ones(num_node).to(device)
-                output[-self.num_attribute:] = 0 # assign 0 to attribute nodes
-                intermediates.append(None)
-                continue
-            
-            if module_type in {'intersect', 'union', 
-                        'equal', 'equal_integer', 'less_than', 'greater_than'}:
-                output = module(output, saved_output)  # these modules take two feature maps
-            elif module_type in {'exist', 'count'}:
-                output = module(output) # take as input one attention
-            elif module_type in {'query', 'relate'}:
-                output = module(output, cat_matrixes[0], self.edge_cat_vectors, query, feat_input)
-            elif module_type == 'same':
-                output = module(output, cat_matrixes[0], self.edge_cat_vectors, query, conn_matrixes[0])
-            elif module_type == 'filter':
-                output = module(output, conn_matrixes[0], feat_input, query)
-            else:
-                raise Exception("Invalid module type")
-            
-            if module_type in {'intersect', 'union'}:
-                intermediates.append(None)
-            if module_type in {'intersect', 'union', 'relate', 'same', 'filter'}:
-                intermediates.append((
-                    module_type+'_'+self.vocab['question_idx_to_token'][module_input.item()], 
-                    output.data.cpu().numpy()
-                    ))
+                module = self.function_modules[module_type]
+                if module_type == 'scene':
+                    # store the previous output; it will be needed later
+                    # scene is just a flag, performing no computation
+                    saved_output = output
+                    output = torch.ones(num_node).to(device)
+                    output[-self.num_attribute:] = 0 # assign 0 to attribute nodes
+                    intermediates.append(None)
+                    continue
+                
+                if module_type in {'intersect', 'union', 
+                            'equal', 'equal_integer', 'less_than', 'greater_than'}:
+                    output = module(output, saved_output)  # these modules take two feature maps
+                elif module_type in {'exist', 'count'}:
+                    output = module(output) # take as input one attention
+                elif module_type in {'query', 'relate'}:
+                    output = module(output, cat_matrixes[n], self.edge_cat_vectors, query, feat_input)
+                elif module_type == 'same':
+                    output = module(output, cat_matrixes[n], self.edge_cat_vectors, query, conn_matrixes[n])
+                elif module_type == 'filter':
+                    output = module(output, conn_matrixes[n], feat_input, query)
+                else:
+                    raise Exception("Invalid module type")
+                
+                if module_type in {'intersect', 'union'}:
+                    intermediates.append(None)
+                if module_type in {'intersect', 'union', 'relate', 'same', 'filter'}:
+                    module_input = self.vocab['question_idx_to_token'][module_input.item()]
+                    intermediates.append((
+                        module_type + ('[%s]'%(module_input) if module_input!='<NULL>' else ''), 
+                        output.data.cpu().numpy()
+                        ))
+        except Exception as e:
+            print("Find a wrong program")
+            output = torch.zeros(self.dim_v).to(device)
+            intermediates = []
      
         _, pred = self.classifier(output.unsqueeze(0)).max(1)
         return (self.vocab['answer_idx_to_token'][pred.item()], intermediates)

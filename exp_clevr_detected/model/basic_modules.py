@@ -52,7 +52,6 @@ class AttendNodeModule(nn.Module):
         """
         assert node_vectors.size(1) == query.size(0)
         logit = torch.matmul(node_vectors, query)
-        # attn = F.softmax(logit, dim=0)
         attn = F.sigmoid(logit/0.1)
 
         return attn
@@ -72,8 +71,6 @@ class AttendEdgeModule(nn.Module):
             attn [Tensor] (num_node, ): Edge attention weights
         """
         logit = torch.matmul(edge_cat_vectors, query)
-        # Trick! make it easier to get rid of sub-optimal hole
-        #cat_attn = F.softmax(logit/0.01, dim=0) # (num_edge_cat, )
         cat_attn = F.softmax(logit, dim=0) # (num_edge_cat, )
         
         # cat 0 means no edge, so assign zero to its weight and renormalize cat_attn
@@ -81,19 +78,16 @@ class AttendEdgeModule(nn.Module):
         mask[0] = 0
         cat_attn = cat_attn * mask
         cat_attn /= cat_attn.sum()
-        #print(cat_attn)
-        entropy = - torch.sum(cat_attn * torch.log(cat_attn + 1e-8))
 
-        # -----------
         num_node, num_rel = cat_matrix.size(0), cat_matrix.size(2)
         cat_attn = cat_attn.view(-1, 1, 1).expand(-1, num_node, num_rel) # (num_edge_cat, num_node, num_rel)
         attn = torch.gather(cat_attn, dim=0, index=cat_matrix) # (num_node, num_node, num_rel)
-        attn = torch.max(attn, dim=2)[0] # (num_node, num_node)
-        return attn, entropy
+        attn = torch.sum(attn, dim=2) # (num_node, num_node)
+        return attn
 
 
 class AttendDenseEdgeModule(nn.Module):
-    def forward(self, edge_vectors, query):
+    def forward(self, edge_cat_vectors, query, edge_vectors):
         # edge_vectors: (n, n, dim)
         # query: (dim, )
         query = query.view(1, 1, -1).expand_as(edge_vectors)
@@ -107,8 +101,7 @@ class AttendLearnedEdgeModule(nn.Module):
         query = query.view(1, 1, -1).expand_as(edge_vectors)
         logit = torch.sum(edge_vectors * query, dim=2) # (n, n)
         attn = F.sigmoid(logit)
-        entropy = torch.mean(-torch.sum(cat_matrix * torch.log(cat_matrix + 1e-8), dim=2)) 
-        return attn, entropy
+        return attn
 
 
 

@@ -4,13 +4,13 @@
 ### preprocess CLEVR train questions and obtain two output files: train_questions.pt and vocab.json
 ```
 cd preprocess
-python preprocess_questions.py --input_questions_json /data/sjx/CLEVR_v1.0/questions/CLEVR_train_questions.json --output_pt_file /data/sjx/CLEVR-Exp/data/train_questions.pt --output_vocab_json /data/sjx/CLEVR-Exp/data/vocab.json
+python preprocess_questions.py --input_questions_json /data4/CLEVR_v1.0/questions/CLEVR_train_questions.json --output_pt_file /data4/jiaxin/exp/CLEVR/data_clevr/train_questions.pt --output_vocab_json /data4/jiaxin/exp/CLEVR/data_clevr/vocab.json
 ```
 
 ### preprocess CLEVR val questions. Load generated vocab.json and will not change it
 ```
 cd preprocess
-python preprocess_questions.py --input_questions_json /data/sjx/CLEVR_v1.0/questions/CLEVR_val_questions.json --output_pt_file /data/sjx/CLEVR-Exp/data/val_questions.pt --input_vocab_json /data/sjx/CLEVR-Exp/data/vocab.json
+python preprocess_questions.py --input_questions_json /data4/CLEVR_v1.0/questions/CLEVR_val_questions.json --output_pt_file /data4/jiaxin/exp/CLEVR/data_clevr/val_questions.pt --input_vocab_json /data4/jiaxin/exp/CLEVR/data_clevr/vocab.json
 ```
 
 ### detect salient objects with the help of [tbd-net](https://github.com/davidmascharka/tbd-nets).
@@ -33,6 +33,8 @@ python scripts/extract_features.py \
 ```
 Note: `--model_stage 2` is necessary to extract high-resolution features.
 
+**For detected setting**:
+
 4. copy my `utils/find-salient.py` into the main directory of tbd project.
 
 5. detect salient objects and coordinates using following commands:
@@ -42,13 +44,22 @@ python find-salient.py --input_h5 /data1/jiaxin/exp/CLEVR/data/val_features_28x2
 
 ```
 
+**For gt grounding with visual features**:
+
+4. fetch visual features of gt objects
+```
+python fetch_gt_features.py --feature_h5 /data4/jiaxin/exp/CLEVR/data_clevr/train_features_28x28.h5 --scene_json /data4/CLEVR_v1.0/scenes/CLEVR_train_scenes.json --image_dir /data4/CLEVR_v1.0/images/train --output_pt /data4/jiaxin/exp/CLEVR/data_clevr/train_gt_features.pt
+python fetch_gt_features.py --feature_h5 /data4/jiaxin/exp/CLEVR/data_clevr/val_features_28x28.h5 --scene_json /data4/CLEVR_v1.0/scenes/CLEVR_val_scenes.json --image_dir /data4/CLEVR_v1.0/images/val --output_pt /data4/jiaxin/exp/CLEVR/data_clevr/val_gt_features.pt
+```
+**Note**: When using gt features, --edge_class must be 'dense'.
+
 
 ### Finally, please check whether you have prepared all these files:
 - vocab.json
 - train_questions.pt
 - val_questions.pt
-- train_features_salient_thres0.4.pt
-- val_features_salient_thres0.4.pt
+- train_features_salient_thres0.4.pt or train_gt_features.pt
+- val_features_salient_thres0.4.pt or val_gt_features.pt
 
 
 # Train

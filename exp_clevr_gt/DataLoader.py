@@ -64,17 +64,6 @@ def load_vocab(path):
         vocab['program_idx_to_token'] = invert_dict(vocab['program_token_to_idx'])
         vocab['answer_idx_to_token'] = invert_dict(vocab['answer_token_to_idx'])
         vocab['edge_idx_to_token'] = invert_dict(vocab['edge_token_to_idx'])
-
-    # our answers format differs from that of Johnson et al.
-    # ?????????? what is this
-    # answers = ['blue', 'brown', 'cyan', 'gray', 'green', 'purple', 'red', 'yellow',
-    #            'cube', 'cylinder', 'sphere',
-    #            'large', 'small',
-    #            'metal', 'rubber',
-    #            'no', 'yes',
-    #            '0', '1', '10', '2', '3', '4', '5', '6', '7', '8', '9']
-    # vocab['answer_idx_to_token'] = dict(zip(range(len(answers)), answers))
-    # vocab['answer_token_to_idx'] = dict(zip(answers, range(len(answers))))
     return vocab
 
 
@@ -174,6 +163,21 @@ class ClevrDataLoader():
             programs = obj['programs']
             program_inputs = obj['program_inputs']
             answers = obj['answers']
+
+        if 'annotation_json' in kwargs:
+            annotations = json.load(open(kwargs.pop('annotation_json')))['scenes']
+            self.orig_annotations = { int(s['image_index']):s for s in annotations }
+
+        self.ratio = None
+        if 'ratio' in kwargs:
+            self.ratio = kwargs.pop('ratio')
+            total = int(len(questions) * self.ratio)
+            print('training ratio = %.3f, containing %d questions' % (self.ratio, total))
+            questions = questions[:total]
+            image_indices = image_indices[:total]
+            programs = programs[:total]
+            program_inputs = program_inputs[:total]
+            answers = answers[:total]
         
         self.dataset = ClevrDataset(questions, image_indices, programs, program_inputs, answers,\
                                     conn_matrixes, edge_matrixes, vertex_vectors)
@@ -182,16 +186,19 @@ class ClevrDataLoader():
         self.batch_size = kwargs.pop('batch_size')
         self.shuffle = kwargs.pop('shuffle')
 
+
     def generator(self):
         random_idxs = np.arange(len(self.dataset))
         if self.shuffle:
             np.random.shuffle(random_idxs)
         for batch_iter in range(0, len(self.dataset), self.batch_size):
             data = []
+            self.idx_cache = []
             self.desc_cache = []
             for i in range(batch_iter, min(batch_iter+self.batch_size, len(self.dataset))):
                 data.append(self.dataset[random_idxs[i]])
                 image_idx = self.dataset.all_image_idxs[random_idxs[i]].item()
+                self.idx_cache.append(image_idx)
                 self.desc_cache.append(self.scene_descs[image_idx])
 
             data = clevr_collate(data)

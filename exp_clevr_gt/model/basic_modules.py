@@ -46,12 +46,6 @@ class AttendNodeModule(nn.Module):
         logit = torch.matmul(node_vectors, query)
         attn = F.softmax(logit, dim=0)
 
-#        idx = torch.argmax(attn, dim=0)
-#        num_node = node_vectors.size(0)
-#        gate = np.asarray(np.arange(num_node)==idx, dtype=np.int32)
-#        gate = torch.Tensor(gate).to(query.device).float()
-#        attn = (gate - attn).detach() + attn
-
         return attn
 
 
@@ -69,23 +63,19 @@ class AttendEdgeModule(nn.Module):
             attn [Tensor] (num_node, ): Edge attention weights
         """
         logit = torch.matmul(edge_cat_vectors, query)
-        #cat_attn = F.softmax(logit, dim=0) # (num_edge_cat, )
-        # Trick! make it easier to get rid of sub-optimal hole
-        cat_attn = F.softmax(logit/0.01, dim=0) # (num_edge_cat, )
-        
+        cat_attn = F.softmax(logit, dim=0) # (num_edge_cat, )
         # cat 0 means no edge, so assign zero to its weight and renormalize cat_attn
         mask = torch.ones(logit.size(0)).to(query.device)
         mask[0] = 0
         cat_attn = cat_attn * mask
         cat_attn /= cat_attn.sum()
-        entropy = - torch.sum(cat_attn * torch.log(cat_attn + 1e-8))
 
-        # -----------
         num_node, num_rel = cat_matrix.size(0), cat_matrix.size(2)
         cat_attn = cat_attn.view(-1, 1, 1).expand(-1, num_node, num_rel) # (num_edge_cat, num_node, num_rel)
         attn = torch.gather(cat_attn, dim=0, index=cat_matrix) # (num_node, num_node, num_rel)
-        attn = torch.max(attn, dim=2)[0] # (num_node, num_node)
-        return attn, entropy
+        attn = torch.sum(attn, dim=2) # (num_node, num_node)
+
+        return attn
 
 
 class TransConnectModule(nn.Module):
