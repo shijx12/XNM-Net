@@ -30,11 +30,19 @@ def main():
         2048, # dim_vision,
         36, # 36 for fixed case, 100 for the adaptive case
     )
+    boxes_shape = (
+        features_shape[0],
+        4,
+        36,
+    )
 
     path = args.output_h5
     with h5py.File(path, libver='latest') as fd:
         features = fd.create_dataset('features', shape=features_shape, dtype='float32')
         coco_ids = fd.create_dataset('ids', shape=(features_shape[0],), dtype='int32')
+        boxes = fd.create_dataset('boxes', shape=boxes_shape, dtype='float32')
+        widths = fd.create_dataset('widths', shape=(features_shape[0],), dtype='int32')
+        heights = fd.create_dataset('heights', shape=(features_shape[0],), dtype='int32')
 
         readers = []
         for filename in os.listdir(args.input_tsv_folder):
@@ -48,11 +56,18 @@ def main():
         reader = itertools.chain.from_iterable(readers)
         for i, item in enumerate(tqdm(reader, total=features_shape[0])):
             coco_ids[i] = int(item['image_id'])
+            widths[i] = int(item['image_w'])
+            heights[i] = int(item['image_h'])
 
             buf = base64.decodestring(item['features'].encode('utf8'))
             array = np.frombuffer(buf, dtype='float32')
             array = array.reshape((-1, 2048)).transpose()
             features[i, :, :array.shape[1]] = array
+
+            buf = base64.decodestring(item['boxes'].encode('utf8'))
+            array = np.frombuffer(buf, dtype='float32')
+            array = array.reshape((-1, 4)).transpose()
+            boxes[i, :, :array.shape[1]] = array
 
 
 if __name__ == '__main__':

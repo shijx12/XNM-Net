@@ -1,88 +1,84 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .basic_modules import *
 from IPython import embed
-
-class ExistOrCountModule(nn.Module):
-    def __init__(self, dim_v):
-        super().__init__()
-        self.projection = nn.Sequential(
-                nn.Linear(1, 128),
-                nn.ReLU(),
-                nn.Linear(128, dim_v)
-                )
-        for layer in self.projection:
-            if isinstance(layer, nn.Linear):
-                nn.init.kaiming_normal_(layer.weight)
-                nn.init.constant_(layer.bias, val=0)
-
-    def forward(self, attn):
-        out = self.projection(torch.sum(attn, dim=0, keepdim=True)) 
-        return out
-
 
 class FindModule(nn.Module):
     def __init__(self, **kwargs):
         super().__init__()
-        self.attendNode = AttendNodeModule()
-        self.attnAnd = AndModule()
+        self.map_q = nn.Sequential(
+                nn.Linear(kwargs['dim_hidden'], kwargs['dim_v'])
+                )
+        self.map_weight = nn.Sequential(
+            nn.Linear(kwargs['dim_v'], 1),
+            nn.Sigmoid(),
+            )
 
-    def forward(self, attn, feat, query):
-        new_object_attn = self.attendNode(feat, query)
-        out = self.attnAnd(attn, new_object_attn)
+    def forward(self, attn, feat, feat_edge, query, relation_mask):
+        query = self.map_q(query)
+        elt_prod = F.normalize(query.unsqueeze(1)*feat, p=2, dim=2) # (batch_size, num_feat, dim_v)
+        new_attn = self.map_weight(elt_prod).squeeze(2) # (bsz, num_feat) 
+        out = torch.min(attn, new_attn)
+        return out
+
+
+class RelateModule(nn.Module):
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.map_q = nn.Sequential(
+                nn.Linear(kwargs['dim_hidden'], kwargs['dim_edge'])
+                )
+        self.map_weight = nn.Sequential(
+            nn.Linear(kwargs['dim_edge'], 1),
+            nn.Sigmoid(),
+            )
+        self.gate = nn.Sequential(
+                nn.Linear(kwargs['dim_edge'], 128),
+                nn.ReLU(),
+                nn.Linear(128, 2),
+                nn.Softmax(dim=1)
+                )
+
+    def forward(self, attn, feat, feat_edge, query, relation_mask):
+        batch_size = query.size(0)
+        query = self.map_q(query)
+        weit_matrix = self.map_weight(feat_edge * query.view(batch_size, 1, 1, -1)).squeeze(3)
+        weit_matrix = weit_matrix * relation_mask.float()
+        new_attn = torch.matmul(attn.unsqueeze(1), weit_matrix).squeeze(1)
+        # ---------
+        norm = torch.max(new_attn, dim=1, keepdim=True)[0].detach()
+        norm[norm<=1] = 1
+        new_attn /= norm
+        # ---------
+        weight = self.gate(query)
+        # print(weight)
+        out = torch.matmul(weight.unsqueeze(1), torch.stack([attn, new_attn], dim=1)).squeeze(1) #(bsz, num_node)
         return out
 
 
 class DescribeModule(nn.Module):
     def __init__(self, **kwargs):
         super().__init__()
-        dim_v = kwargs['dim_v']
-        self.count = ExistOrCountModule(dim_v)
-        self.gate = nn.Sequential(
-                nn.Linear(dim_v, 128),
+        self.count = nn.Sequential(
+                nn.Linear(1, 128),
                 nn.ReLU(),
-                nn.Linear(128, 2),
-                nn.Softmax(dim=0)
+                nn.Linear(128, kwargs['dim_v'])
                 )
-        K = kwargs['k_desc']
-        self.query_to_weight = nn.Sequential(
-            nn.Linear(dim_v, K),
-            nn.Softmax(dim=0),
+        self.gate = nn.Sequential(
+                nn.Linear(kwargs['dim_hidden'], 256),
+                nn.ReLU(),
+                nn.Linear(256, 2),
+                nn.Softmax(dim=1)
                 )
-        self.mappings = nn.Parameter(torch.zeros((K, dim_v, dim_v)))
-        nn.init.normal_(self.mappings.data, mean=0, std=0.01)
 
-    def forward(self, attn, feat, query):
-        # -------- describe ----------
-        out_1 = torch.matmul(attn, feat)
-        desc_weight = self.query_to_weight(query)
-        mapping = torch.sum(self.mappings * desc_weight.view(-1,1,1), dim=0) # (dim_v, dim_v)
-        out_1 = torch.matmul(mapping, out_1)
+    def forward(self, attn, feat, feat_edge, query, relation_mask):
         # -------- count ----------
-        out_2 = self.count(attn)
+        count = self.count(torch.sum(attn, dim=1, keepdim=True))
+        # -------- describe ----------
+        attn = F.softmax(attn, dim=1)
+        desc = torch.matmul(attn.unsqueeze(1), feat).squeeze(1)
         # ------------------------
         weight = self.gate(query)
-        out = torch.matmul(weight, torch.stack([out_1, out_2]))
-        return out # (dim_v, )
+        out = torch.matmul(weight.unsqueeze(1), torch.stack([count, desc], dim=1)).squeeze(1) #(bsz, dim_v)
+        return out # (bsz, dim_v)
 
-
-class RelateModule(nn.Module):
-    def __init__(self, **kwargs):
-        super().__init__()
-        dim_v = kwargs['dim_v']
-        self.attendEdge = AttendEdgeModule()
-        self.transWeit = TransWeightModule()
-        self.gate = nn.Sequential(
-                nn.Linear(dim_v, 128),
-                nn.ReLU(),
-                nn.Linear(128, 2),
-                nn.Softmax(dim=0)
-                )
-
-    def forward(self, attn, feat_edge, query):
-        weit_matrix = self.attendEdge(feat_edge, query)
-        out = self.transWeit(attn, weit_matrix)
-        weight = self.gate(query)
-        out = torch.matmul(weight, torch.stack([out, attn]))
-        return out

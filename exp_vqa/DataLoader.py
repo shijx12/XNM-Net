@@ -45,7 +45,7 @@ def load_vocab(path):
 class VQADataset(Dataset):
 
     def __init__(self, answers, questions, questions_len, q_image_indices,
-                       feature_h5, feat_coco_id_to_index, num_answer):
+                       feature_h5, feat_coco_id_to_index, num_answer, use_spatial, relation_mask_cache):
         # convert data to tensor
         self.all_answers = answers
         self.all_questions = torch.LongTensor(np.asarray(questions))
@@ -55,6 +55,8 @@ class VQADataset(Dataset):
         self.feature_h5 = feature_h5
         self.feat_coco_id_to_index = feat_coco_id_to_index
         self.num_answer = num_answer
+        self.use_spatial = use_spatial
+        self.relation_mask_cache = relation_mask_cache
 
 
     def __getitem__(self, index):
@@ -68,9 +70,22 @@ class VQADataset(Dataset):
         question_len = self.all_questions_len[index]
         image_idx = self.all_q_image_idxs[index].item() # coco_id
         # fetch vision features
-        vision_feat = self._load_image(image_idx)
+        vision_feat, boxes = self._load_image(image_idx)
+        if image_idx in self.relation_mask_cache:
+            relation_mask = self.relation_mask_cache[image_idx]
+        else:
+            num_feat = boxes.shape[1]
+            relation_mask = np.zeros((num_feat, num_feat))
+            for i in range(num_feat):
+                for j in range(i+1, num_feat):
+                    if boxes[0,i]>boxes[2,j] or boxes[0,j]>boxes[2,i] or boxes[1,i]>boxes[3,j] or boxes[1,j]>boxes[3,i]:
+                        pass
+                    else:
+                        relation_mask[i,j] = relation_mask[j,i] = 1
+            self.relation_mask_cache[image_idx] = relation_mask
+        relation_mask = torch.from_numpy(relation_mask).byte()
 
-        return (image_idx, answer, question, question_len, vision_feat)
+        return (image_idx, answer, question, question_len, vision_feat, relation_mask)
 
     def __len__(self):
         return len(self.all_questions)
@@ -78,8 +93,21 @@ class VQADataset(Dataset):
     def _load_image(self, image_id):
         """ Load an image """
         index = self.feat_coco_id_to_index[image_id]
-        vision_feat = self.feature_h5[index]
-        return torch.from_numpy(vision_feat)
+        vision_feat = self.feature_h5['features'][index]
+        boxes = self.feature_h5['boxes'][index]
+        w = self.feature_h5['widths'][index]
+        h = self.feature_h5['heights'][index]
+        spatial_feat = np.zeros((5, len(boxes[0])))
+        spatial_feat[0, :] = boxes[0, :] * 2 / w - 1 # x1
+        spatial_feat[1, :] = boxes[1, :] * 2 / h - 1 # y1
+        spatial_feat[2, :] = boxes[2, :] * 2 / w - 1 # x2
+        spatial_feat[3, :] = boxes[3, :] * 2 / h - 1 # y2
+        spatial_feat[4, :] = (spatial_feat[2, :]-spatial_feat[0, :]) * (spatial_feat[3, :]-spatial_feat[1, :])
+        if self.use_spatial:
+            feat = np.concatenate((vision_feat, spatial_feat), axis=0)
+        else:
+            feat = vision_feat
+        return torch.from_numpy(feat).float(), boxes
 
 
 class VQADataLoader(DataLoader):
@@ -102,10 +130,12 @@ class VQADataLoader(DataLoader):
         with h5py.File(kwargs['feature_h5'], 'r') as features_file:
             coco_ids = features_file['ids'][()]
         feat_coco_id_to_index = {id: i for i, id in enumerate(coco_ids)}
-        self.feature_h5 = h5py.File(kwargs.pop('feature_h5'), 'r')['features']
+        self.feature_h5 = h5py.File(kwargs.pop('feature_h5'), 'r')
+        use_spatial = kwargs.pop('spatial')
 
+        self.relation_mask_cache = {}
         self.dataset = VQADataset(answers, questions, questions_len, q_image_indices,
-                self.feature_h5, feat_coco_id_to_index, len(vocab['answer_token_to_idx']))
+                self.feature_h5, feat_coco_id_to_index, len(vocab['answer_token_to_idx']), use_spatial, self.relation_mask_cache)
         
         self.vocab = vocab
         self.batch_size = kwargs['batch_size']

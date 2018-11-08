@@ -65,6 +65,7 @@ def main(args):
                 if token not in question_token_to_idx:
                     question_token_to_idx[token] = len(question_token_to_idx)
         print('Get question_token_to_idx')
+        print(len(question_token_to_idx))
 
         vocab = {
             'question_token_to_idx': question_token_to_idx,
@@ -133,6 +134,7 @@ def main(args):
             vector = glove.get(token_itow[i], np.zeros((dim_word,)))
             glove_matrix.append(vector)
         glove_matrix = np.asarray(glove_matrix, dtype=np.float32)
+        print(glove_matrix.shape)
 
     print('Writing')
     obj = {
@@ -151,7 +153,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--answer_top', default=3000, type=int)
-    parser.add_argument('--glove_pt', default='/data1/jiaxin/dataset/glove.840B.300d.py36.pkl', help='glove pickle file')
+    parser.add_argument('--glove_pt', default='/data/sjx/glove.840B.300d.py36.pkl', help='glove pickle file')
     parser.add_argument('--input_questions_json', required=True)
     parser.add_argument('--input_annotations_json', required=True)
     parser.add_argument('--output_pt', required=True)
