@@ -133,9 +133,9 @@ def main():
     parser.add_argument('--feature_h5', default='trainval_feature.h5')
     parser.add_argument('--restore', action='store_true')
     # training parameters
-    parser.add_argument('--lr', default=6e-4, type=float)
-    parser.add_argument('--lr_halflife', default=80000, type=int)
-    parser.add_argument('--num_epoch', default=100, type=int)
+    parser.add_argument('--lr', default=8e-4, type=float)
+    parser.add_argument('--lr_halflife', default=50000, type=int)
+    parser.add_argument('--num_epoch', default=150, type=int)
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     # model hyperparameters
@@ -147,7 +147,7 @@ def main():
     parser.add_argument('--cls_fc_dim', default=1024, type=int, help='classifier fc dim')
     parser.add_argument('--glimpses', default=2, type=int)
     parser.add_argument('--dropout', default=0.5, type=float)
-    parser.add_argument('--T_ctrl', default=4, type=int, help='controller decode length')
+    parser.add_argument('--T_ctrl', default=3, type=int, help='controller decode length')
     parser.add_argument('--stack_len', default=4, type=int, help='stack length')
     parser.add_argument('--spatial', action='store_true')
     parser.add_argument('--module_prob_use_gumbel', default=0, choices=[0, 1], type=int, help='whether use gumbel softmax for module prob. 0 not use, 1 use')

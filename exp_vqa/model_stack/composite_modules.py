@@ -116,16 +116,9 @@ class DescribeModule(nn.Module):
 
     def forward(self, vision_feat, feat, feat_edge, c_i, relation_mask, att_stack, stack_ptr, mem_in):
         batch_size = feat.size(0)
-        mem_out, div = None, None
-        for i in range(att_stack.size(3)):
-            att_in = att_stack[:,:,:,i].permute(0,2,1) #(batch_size, glimpse, att_dim)
-            out = torch.bmm(att_in, vision_feat) # (batch_size, glimpse, dim_vision)
-            mem_out = out if mem_out is None else mem_out + out
-            weight = att_in.sum(dim=2, keepdim=True) # (batch_size, glimpse, 1)
-            div = weight if div is None else div + weight
-        div = div.detach()
-        div[div == 0] = 1
-        mem_out = mem_out / div
+        att_in = _read_from_stack(att_stack, stack_ptr).permute(0,2,1)
+        mem_out = torch.bmm(att_in, vision_feat)
+
         mem_out = mem_out.view(batch_size, -1) #(batch_size, glimpse*dim_vision)
         return att_stack, stack_ptr, mem_out
 

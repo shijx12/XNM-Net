@@ -126,6 +126,7 @@ class XNMNet(nn.Module):
             if self.use_validity:
                 if t < self.T_ctrl-1:
                     module_validity = torch.matmul(stack_ptr, self.module_validity_mat)
+                    module_validity[:, 5] = 0
                 else: # last step must describe
                     module_validity = torch.zeros(batch_size, self.num_module).to(self.device)
                     module_validity[:, 5] = 1
@@ -143,6 +144,10 @@ class XNMNet(nn.Module):
             stack_ptr_avg = modules._sharpen_ptr(stack_ptr_avg, hard=False)
             mem_avg = torch.sum(module_prob.view(self.num_module,batch_size,1) * torch.stack([r[2] for r in res]), dim=0)
             att_stack, stack_ptr, mem = att_stack_avg, stack_ptr_avg, mem_avg
+            if debug:
+                print('%d / %d' % (t, self.T_ctrl))
+                print(module_prob)
+                embed()
             
         ## Part 1. features from scene graph module network. (batch, dim_v)
         module_outputs = mem
