@@ -75,7 +75,7 @@ def train(args):
             if (i+1) % (len(train_loader) // 10) == 0:
                 logging.info("Progress %.3f  loss = %.3f" % (progress, loss.item()))
         scheduler.step()
-        if (epoch+1) % 10 == 0:
+        if (epoch+1) % 1 == 0:
             valid_acc = validate(model, val_loader, device)
             logging.info('\n ~~~~~~ Valid Accuracy: %.4f ~~~~~~~\n' % valid_acc)
 

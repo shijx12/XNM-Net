@@ -8,16 +8,15 @@ import argparse
 import time
 import shutil
 from IPython import embed
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s')
+logFormatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
+rootLogger = logging.getLogger()
 
 from DataLoader import VQADataLoader
 from model.net import XNMNet
 from utils.misc import todevice
 from validate import validate
-
-import logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s')
-logFormatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
-rootLogger = logging.getLogger()
 
 
 def train(args):
@@ -28,37 +27,40 @@ def train(args):
         'feature_h5': args.feature_h5,
         'batch_size': args.batch_size,
         'spatial': args.spatial,
-        'num_workers': 1,
-        'shuffle': True,
+        'num_workers': 2,
+        'shuffle': True
     }
-    val_loader_kwargs = {
-        'question_pt': args.val_question_pt,
-        'vocab_json': args.vocab_json,
-        'feature_h5': args.feature_h5,
-        'batch_size': args.batch_size,
-        'spatial': args.spatial,
-        'num_workers': 3,
-        'shuffle': False,
-    }
-    
     train_loader = VQADataLoader(**train_loader_kwargs)
-    val_loader = VQADataLoader(**val_loader_kwargs)
+    if args.val:
+        val_loader_kwargs = {
+            'question_pt': args.val_question_pt,
+            'vocab_json': args.vocab_json,
+            'feature_h5': args.feature_h5,
+            'batch_size': args.batch_size,
+            'spatial': args.spatial,
+            'num_workers': 0,
+            'shuffle': False
+        }
+        val_loader = VQADataLoader(**val_loader_kwargs)
 
     logging.info("Create model.........")
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model_kwargs = {
         'vocab': train_loader.vocab,
         'dim_v': args.dim_v,
-        'dim_edge': args.dim_edge,
         'dim_word': args.dim_word,
         'dim_hidden': args.dim_hidden,
         'dim_vision': args.dim_vision,
-        'class_mode': args.class_mode,
+        'dim_edge': args.dim_edge,
+        'cls_fc_dim': args.cls_fc_dim,
         'dropout_prob': args.dropout,
+        'T_ctrl': args.T_ctrl,
+        'glimpses': args.glimpses,
+        'stack_len': args.stack_len,
         'device': device,
         'spatial': args.spatial,
-        'cls_fc_dim': args.cls_fc_dim,
-        'program_scheme': ['find', 'relate', 'describe'],
+        'use_gumbel': args.module_prob_use_gumbel==1,
+        'use_validity': args.module_prob_use_validity==1,
     }
     model_kwargs_tosave = { k:v for k,v in model_kwargs.items() if k != 'vocab' }
     model = XNMNet(**model_kwargs).to(device)
@@ -69,7 +71,7 @@ def train(args):
     ################################################################
 
     parameters = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.Adam(parameters, args.lr, weight_decay=args.l2reg)
+    optimizer = optim.Adam(parameters, args.lr, weight_decay=0)
 
     start_epoch = 0
     if args.restore:
@@ -82,7 +84,6 @@ def train(args):
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.5**(1 / args.lr_halflife))
     
     logging.info("Start training........")
-    #print(validate(model, val_loader, device))
     for epoch in range(start_epoch, args.num_epoch):
         model.train()
         for i, batch in enumerate(train_loader):
@@ -96,16 +97,15 @@ def train(args):
             scheduler.step()
             optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_value_(parameters=parameters, clip_value=0.5)
+            nn.utils.clip_grad_value_(parameters, clip_value=0.5)
             optimizer.step()
-
-            if (i+1) % (len(train_loader) // 100) == 0:
+            if (i+1) % (len(train_loader) // 50) == 0:
                 logging.info("Progress %.3f  ce_loss = %.3f" % (progress, loss.item()))
-                #print(progress)
-        valid_acc = validate(model, val_loader, device)
-        logging.info('\n ~~~~~~ Valid Accuracy: %.4f ~~~~~~~\n' % valid_acc)
         save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, os.path.join(args.save_dir, 'model.pt')) 
         logging.info(' >>>>>> save to %s <<<<<<' % (args.save_dir))
+        if args.val:
+            valid_acc = validate(model, val_loader, device)
+            logging.info('\n ~~~~~~ Valid Accuracy: %.4f ~~~~~~~\n' % valid_acc)
 
 
 def save_checkpoint(epoch, model, optimizer, model_kwargs, filename):
@@ -124,30 +124,32 @@ def main():
     # input and output
     parser.add_argument('--save_dir', type=str, required=True, help='path to save checkpoints and logs')
     parser.add_argument('--input_dir', default='/data/sjx/VQA-Exp/data')
-    #parser.add_argument('--input_dir', default='/data1/jiaxin/exp/vqa/data')
-    parser.add_argument('--data_type', default='coco', choices=['coco', 'vg'])
     parser.add_argument('--train_question_pt', default='train_questions.pt')
     parser.add_argument('--val_question_pt', default='val_questions.pt')
     parser.add_argument('--vocab_json', default='vocab.json')
     parser.add_argument('--feature_h5', default='trainval_feature.h5')
     parser.add_argument('--restore', action='store_true')
     # training parameters
-    parser.add_argument('--lr', default=1.5e-3, type=float)
+    parser.add_argument('--lr', default=8e-4, type=float)
     parser.add_argument('--lr_halflife', default=50000, type=int)
-    parser.add_argument('--l2reg', default=0, type=float)
-    parser.add_argument('--num_epoch', default=150, type=int)
+    parser.add_argument('--num_epoch', default=120, type=int)
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
+    parser.add_argument('--val', action='store_true', help='whether validate after each training epoch')
     # model hyperparameters
-    parser.add_argument('--dim_word', default=300, type=int, help='dim of word/node/attribute/edge embedding')
+    parser.add_argument('--dim_word', default=300, type=int, help='word embedding')
     parser.add_argument('--dim_hidden', default=1024, type=int, help='hidden state of seq2seq parser')
-    parser.add_argument('--dim_v', default=512, type=int, help='dim of node embedding')
-    parser.add_argument('--dim_edge', default=256, type=int, help='dim of edge embedding')
+    parser.add_argument('--dim_v', default=512, type=int, help='node embedding')
+    parser.add_argument('--dim_edge', default=256, type=int, help='edge embedding')
     parser.add_argument('--dim_vision', default=2048, type=int)
-    parser.add_argument('--cls_fc_dim', default=1024, type=int)
-    parser.add_argument('--class_mode', default='qvc', choices=['qvc', 'qv', 'c'])
+    parser.add_argument('--cls_fc_dim', default=1024, type=int, help='classifier fc dim')
+    parser.add_argument('--glimpses', default=2, type=int)
     parser.add_argument('--dropout', default=0.5, type=float)
+    parser.add_argument('--T_ctrl', default=3, type=int, help='controller decode length')
+    parser.add_argument('--stack_len', default=4, type=int, help='stack length')
     parser.add_argument('--spatial', action='store_true')
+    parser.add_argument('--module_prob_use_gumbel', default=0, choices=[0, 1], type=int, help='whether use gumbel softmax for module prob. 0 not use, 1 use')
+    parser.add_argument('--module_prob_use_validity', default=1, choices=[0, 1], type=int, help='whether validate module prob.')
     args = parser.parse_args()
 
     # make logging.info display into both shell and file
@@ -164,9 +166,9 @@ def main():
     for k, v in vars(args).items():
         logging.info(k+':'+str(v))
     # concat obsolute path of input files
-    args.train_question_pt = os.path.join(args.input_dir, args.data_type+'_'+args.train_question_pt)
-    args.vocab_json = os.path.join(args.input_dir, args.data_type+'_'+args.vocab_json)
-    args.val_question_pt = os.path.join(args.input_dir, args.data_type+'_'+args.val_question_pt)
+    args.train_question_pt = os.path.join(args.input_dir, args.train_question_pt)
+    args.vocab_json = os.path.join(args.input_dir, args.vocab_json)
+    args.val_question_pt = os.path.join(args.input_dir, args.val_question_pt)
     args.feature_h5 = os.path.join(args.input_dir, args.feature_h5)
     # set random seed
     torch.manual_seed(args.seed)
