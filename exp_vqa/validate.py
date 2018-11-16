@@ -101,6 +101,7 @@ if __name__ == '__main__':
             'feature_h5': args.feature_h5,
             'batch_size': 128,
             'spatial': model_kwargs['spatial'],
+            'num_workers': 2,
             'shuffle': False
         }
         val_loader = VQADataLoader(**val_loader_kwargs)
@@ -117,6 +118,7 @@ if __name__ == '__main__':
             'feature_h5': args.feature_h5,
             'batch_size': 128,
             'spatial': model_kwargs['spatial'],
+            'num_workers': 2,
             'shuffle': False
         }
         test_loader = VQADataLoader(**test_loader_kwargs)

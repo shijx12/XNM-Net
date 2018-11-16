@@ -38,7 +38,7 @@ def train(args):
             'feature_h5': args.feature_h5,
             'batch_size': args.batch_size,
             'spatial': args.spatial,
-            'num_workers': 0,
+            'num_workers': 2,
             'shuffle': False
         }
         val_loader = VQADataLoader(**val_loader_kwargs)
@@ -132,7 +132,7 @@ def main():
     # training parameters
     parser.add_argument('--lr', default=8e-4, type=float)
     parser.add_argument('--lr_halflife', default=50000, type=int)
-    parser.add_argument('--num_epoch', default=120, type=int)
+    parser.add_argument('--num_epoch', default=100, type=int)
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--val', action='store_true', help='whether validate after each training epoch')

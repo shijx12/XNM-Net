@@ -122,7 +122,8 @@ def main(args):
             answers.append(answer)
     elif args.mode == 'test':
         for q in questions: # remain the original order to match the question_id
-            question_tokens = q['question'].split(' ')
+            question = question_id_to_str[q['question_id']] # processed question
+            question_tokens = question.split(' ')
             question_encoded = encode(question_tokens, vocab['question_token_to_idx'], allow_unk=True)
             questions_encoded.append(question_encoded)
             questions_len.append(len(question_encoded))
@@ -169,7 +170,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--answer_top', default=3000, type=int)
-    parser.add_argument('--glove_pt', default='/data/sjx/glove.840B.300d.py36.pkl', help='glove pickle file')
+    parser.add_argument('--glove_pt', default='/data/sjx/glove.840B.300d.py36.pt', help='glove pickle file')
     parser.add_argument('--input_questions_json', required=True)
     parser.add_argument('--input_annotations_json')
     parser.add_argument('--output_pt', required=True)
