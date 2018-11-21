@@ -198,8 +198,12 @@ class XNMNet(nn.Module):
             if module_type in {'intersect', 'union'}:
                 intermediates.append(None)
             if module_type in {'intersect', 'union', 'relate', 'same', 'filter'}:
+                if self.vocab['question_idx_to_token'][module_input.item()] == '<NULL>':
+                    module_str = module_type
+                else:
+                    module_str = "%s[%s]" % (module_type, self.vocab['question_idx_to_token'][module_input.item()])
                 intermediates.append((
-                    module_type+'_'+self.vocab['question_idx_to_token'][module_input.item()],
+                    module_str,
                     output.data.cpu().numpy()
                     ))
      
