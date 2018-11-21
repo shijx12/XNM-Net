@@ -36,9 +36,16 @@ def process_punctuation(s):
 
 def main(args):
     print('Loading data')
-    annotations = json.load(open(args.input_annotations_json, 'r'))['annotations']
-    questions = json.load(open(args.input_questions_json, 'r'))['questions']
+    annotations, questions = [], []
+    if args.input_annotations_json is not None:
+        for f in args.input_annotations_json.split(':'):
+            annotations += json.load(open(f, 'r'))['annotations']
+    for f in args.input_questions_json.split(':'):
+        questions += json.load(open(f, 'r'))['questions']
+    print('number of questions: %s' % len(questions))
     question_id_to_str = { q['question_id']:q['question'] for q in questions }
+    if args.mode != 'test':
+        assert len(annotations) > 0
 
     # Either create the vocab or load it from disk
     if args.mode == 'train':
@@ -98,20 +105,30 @@ def main(args):
     questions_len = []
     image_idxs = []
     answers = []
-    for a in annotations:
-        question = question_id_to_str[a['question_id']]
-        question_tokens = question.split(' ')
-        question_encoded = encode(question_tokens, vocab['question_token_to_idx'], allow_unk=True)
-        questions_encoded.append(question_encoded)
-        questions_len.append(len(question_encoded))
-        image_idxs.append(a['image_id'])
+    if args.mode in {'train', 'val'}:
+        for a in annotations:
+            question = question_id_to_str[a['question_id']]
+            question_tokens = question.split(' ')
+            question_encoded = encode(question_tokens, vocab['question_token_to_idx'], allow_unk=True)
+            questions_encoded.append(question_encoded)
+            questions_len.append(len(question_encoded))
+            image_idxs.append(a['image_id'])
 
-        answer = [] 
-        for per_ans in a['answers']:
-            if per_ans in vocab['answer_token_to_idx']:
-                i = vocab['answer_token_to_idx'][per_ans]
-                answer.append(i)
-        answers.append(answer)
+            answer = [] 
+            for per_ans in a['answers']:
+                if per_ans in vocab['answer_token_to_idx']:
+                    i = vocab['answer_token_to_idx'][per_ans]
+                    answer.append(i)
+            answers.append(answer)
+    elif args.mode == 'test':
+        for q in questions: # remain the original order to match the question_id
+            question = question_id_to_str[q['question_id']] # processed question
+            question_tokens = question.split(' ')
+            question_encoded = encode(question_tokens, vocab['question_token_to_idx'], allow_unk=True)
+            questions_encoded.append(question_encoded)
+            questions_len.append(len(question_encoded))
+            image_idxs.append(q['image_id'])
+            answers.append([0])
 
     # Pad encoded questions
     max_question_length = max(len(x) for x in questions_encoded)
@@ -153,11 +170,11 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--answer_top', default=3000, type=int)
-    parser.add_argument('--glove_pt', default='/data/sjx/glove.840B.300d.py36.pkl', help='glove pickle file')
+    parser.add_argument('--glove_pt', default='/data/sjx/glove.840B.300d.py36.pt', help='glove pickle file')
     parser.add_argument('--input_questions_json', required=True)
-    parser.add_argument('--input_annotations_json', required=True)
+    parser.add_argument('--input_annotations_json')
     parser.add_argument('--output_pt', required=True)
     parser.add_argument('--vocab_json', required=True)
-    parser.add_argument('--mode', choices=['train', 'val'])
+    parser.add_argument('--mode', choices=['train', 'val', 'test'])
     args = parser.parse_args()
     main(args)

@@ -10,7 +10,6 @@ from IPython import embed
 
 from DataLoader import VQADataLoader
 from model.net import XNMNet
-from model_stack.net import XNMNet as StackXNMNet
 from utils.misc import todevice
 
 
@@ -61,65 +60,75 @@ def validate(model, data, device):
     return acc
 
 
-def visualize(model, data, device):
+def test(model, data, device):
     model.eval()
-    for batch in data:
+    results = []
+    for batch in tqdm(data, total=len(data)):
         coco_ids, answers, *batch_input = [todevice(x, device) for x in batch]
-        batch_input.append(True)
         logits, others = model(*batch_input)
+        predicts = torch.max(logits, dim=1)[1]
+        for predict in predicts:
+            results.append(data.vocab['answer_idx_to_token'][predict.item()])
+    return results
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', default='vis', choices=['val', 'vis'])
-    parser.add_argument('--model', default='stack', choices=['stack', 'seq'])
+    parser.add_argument('--mode', default='val', choices=['val', 'test'])
     # input
     parser.add_argument('--ckpt', required=True)
     parser.add_argument('--input_dir', default='/data/sjx/VQA-Exp/data')
-    parser.add_argument('--data_type', default='coco', choices=['coco', 'vg'])
-    parser.add_argument('--train_question_pt', default='train_questions.pt')
     parser.add_argument('--val_question_pt', default='val_questions.pt')
+    parser.add_argument('--test_question_pt', default='test_questions.pt')
     parser.add_argument('--vocab_json', default='vocab.json')
     parser.add_argument('--feature_h5', default='trainval_feature.h5')
+    parser.add_argument('--output_file', help='used only in test mode')
+    parser.add_argument('--test_question_json', help='path to v2_OpenEnded_mscoco_test2015_questions.json, used only in test mode')
     args = parser.parse_args()
 
-    args.train_question_pt = os.path.join(args.input_dir, args.data_type+'_'+args.train_question_pt)
-    args.vocab_json = os.path.join(args.input_dir, args.data_type+'_'+args.vocab_json)
-    args.val_question_pt = os.path.join(args.input_dir, args.data_type+'_'+args.val_question_pt)
+    args.vocab_json = os.path.join(args.input_dir, args.vocab_json)
+    args.val_question_pt = os.path.join(args.input_dir, args.val_question_pt)
+    args.test_question_pt = os.path.join(args.input_dir, args.test_question_pt)
     args.feature_h5 = os.path.join(args.input_dir, args.feature_h5)
     
-    device = 'cuda' if args.mode == 'val' else 'cpu'
+    device = 'cuda'
     loaded = torch.load(args.ckpt, map_location={'cuda:0': 'cpu'})
     model_kwargs = loaded['model_kwargs']
-    val_loader_kwargs = {
-        'question_pt': args.val_question_pt,
-        'vocab_json': args.vocab_json,
-        'feature_h5': args.feature_h5,
-        'batch_size': 128 if args.mode == 'val' else 1,
-        'spatial': model_kwargs['spatial'],
-        'shuffle': False
-    }
-    train_loader_kwargs = {
-        'question_pt': args.train_question_pt,
-        'vocab_json': args.vocab_json,
-        'feature_h5': args.feature_h5,
-        'batch_size': 128 if args.mode == 'val' else 1,
-        'spatial': model_kwargs['spatial'],
-        'shuffle': False
-    }
-    train_loader = VQADataLoader(**train_loader_kwargs)
-    val_loader = VQADataLoader(**val_loader_kwargs)
-
-    model_kwargs.update({'vocab': val_loader.vocab, 'device': device})
-    Model = XNMNet if args.model == 'seq' else StackXNMNet
-    model = Model(**model_kwargs).to(device)
-    model.load_state_dict(loaded['state_dict'])
-
     if args.mode == 'val':
-        train_acc = validate(model, train_loader, device)
-        print('train acc: %.4f' % train_acc)
+        val_loader_kwargs = {
+            'question_pt': args.val_question_pt,
+            'vocab_json': args.vocab_json,
+            'feature_h5': args.feature_h5,
+            'batch_size': 128,
+            'spatial': model_kwargs['spatial'],
+            'num_workers': 2,
+            'shuffle': False
+        }
+        val_loader = VQADataLoader(**val_loader_kwargs)
+        model_kwargs.update({'vocab': val_loader.vocab, 'device': device})
+        model = XNMNet(**model_kwargs).to(device)
+        model.load_state_dict(loaded['state_dict'])
         valid_acc = validate(model, val_loader, device)
         print('valid acc: %.4f' % valid_acc)
-    else:
-        visualize(model, val_loader, device)
-
+    elif args.mode == 'test':
+        assert args.output_file and os.path.exists(args.test_question_json)
+        test_loader_kwargs = {
+            'question_pt': args.test_question_pt,
+            'vocab_json': args.vocab_json,
+            'feature_h5': args.feature_h5,
+            'batch_size': 128,
+            'spatial': model_kwargs['spatial'],
+            'num_workers': 2,
+            'shuffle': False
+        }
+        test_loader = VQADataLoader(**test_loader_kwargs)
+        model_kwargs.update({'vocab': test_loader.vocab, 'device': device})
+        model = XNMNet(**model_kwargs).to(device)
+        model.load_state_dict(loaded['state_dict'])
+        results = test(model, test_loader, device)
+        questions = json.load(open(args.test_question_json))['questions']
+        assert len(results) == len(questions)
+        results = [{'answer':r, "question_id":q['question_id']} for r,q in zip(results, questions)]
+        with open(args.output_file, 'w') as f:
+            json.dump(results, f)
+        print('write into %s' % args.output_file)

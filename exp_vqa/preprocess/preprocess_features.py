@@ -18,8 +18,8 @@ from tqdm import tqdm
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output_h5', required=True)
-    parser.add_argument('--input_tsv_folder', required=True)
-    parser.add_argument('--test', action='store_true')
+    parser.add_argument('--input_tsv_folder', required=True, help='path to trainval_36 or test2015_36')
+    parser.add_argument('--test', action='store_true', help='specified when processing test2015_36')
     args = parser.parse_args()
     assert os.path.isdir(args.input_tsv_folder)
 

@@ -109,6 +109,50 @@ def validate_with_david_generated_program(model, data, device, pretrained_dir):
     return acc, details
 
 
+def test_with_david_generated_program(model, data, device, pretrained_dir):
+    program_generator = load_program_generator(os.path.join(pretrained_dir, 'program_generator.pt')).to(device)
+    david_vocab = json.load(open(os.path.join(pretrained_dir, 'david_vocab.json')))
+    david_vocab['program_idx_to_token'] = invert_dict(david_vocab['program_token_to_idx'])
+    results = {}
+    question_index = 0
+    model.eval()
+    for batch in tqdm(data, total=len(data)):
+        _, questions, gt_programs, gt_program_inputs, features, edge_vectors = [todevice(x, device) for x in batch]
+        programs, program_inputs = [], []
+        # generate program using david model for each question
+        for i in range(questions.size(0)):
+            question_str = []
+            for j in range(questions.size(1)):
+                word = data.vocab['question_idx_to_token'][questions[i,j].item()]
+                if word == '<START>': continue
+                if word == '<END>': break
+                question_str.append(word)
+            question_str = ' '.join(question_str) # question string
+            david_program = generate_single_program(question_str, program_generator, david_vocab, device)
+            david_program = [david_vocab['program_idx_to_token'][i.item()] for i in david_program.squeeze()]
+            # convert david program to ours. return two index lists
+            program, program_input = convert_david_program_to_mine(david_program, data.vocab)
+            programs.append(program)
+            program_inputs.append(program_input)
+        # padding
+        max_len = max(len(p) for p in programs)
+        for i in range(len(programs)):
+            while len(programs[i]) < max_len:
+                programs[i].append(vocab['program_token_to_idx']['<NULL>'])
+                program_inputs[i].append(vocab['question_token_to_idx']['<NULL>'])
+        # to tensor
+        programs = torch.LongTensor(programs).to(device)
+        program_inputs = torch.LongTensor(program_inputs).to(device)
+
+        logits, others = model(programs, program_inputs, features, edge_vectors)
+        predicts = logits.max(1)[1]
+        for predict in predicts: # questions must not shuffle
+            results[question_index] = data.vocab['answer_idx_to_token'][predict.item()]
+            question_index += 1
+    return results
+
+
+
 def show_edge_attention(model, data):
     print('*'*99)
     for word in ['front', 'behind', 'right', 'left']:
@@ -169,31 +213,49 @@ if __name__ == '__main__':
     parser.add_argument('--input_dir', default='/data1/jiaxin/exp/CLEVR/data/')
     parser.add_argument('--val_question_pt', default='val_questions.pt')
     parser.add_argument('--val_feature_pt', default='val_features_salient_thres0.4.pt')
+    parser.add_argument('--test_question_pt', default='test_questions.pt')
+    parser.add_argument('--test_feature_pt', default='test_features_salient_thres0.4.pt')
     parser.add_argument('--vocab_json', default='vocab.json')
     parser.add_argument('--pretrained_dir', default='../pretrained')
     # control parameters
-    parser.add_argument('--mode', default='vis', choices=['vis', 'val'])
+    parser.add_argument('--mode', default='vis', choices=['vis', 'val', 'test'])
     parser.add_argument('--program', default='gt', choices=['gt', 'david'])
+    parser.add_argument('--output_file', help='used in test mode')
     args = parser.parse_args()
 
     args.vocab_json = os.path.join(args.input_dir, args.vocab_json)
     args.val_question_pt = os.path.join(args.input_dir, args.val_question_pt)
     args.val_feature_pt = os.path.join(args.input_dir, args.val_feature_pt)
+    args.test_question_pt = os.path.join(args.input_dir, args.test_question_pt)
+    args.test_feature_pt = os.path.join(args.input_dir, args.test_feature_pt)
     
     device = 'cpu' if args.mode=='vis' else 'cuda'
     loaded = torch.load(args.ckpt, map_location={'cuda:0': 'cpu'})
     model_kwargs = loaded['model_kwargs']
-    val_loader_kwargs = {
-        'question_pt': args.val_question_pt,
-        'feature_pt': args.val_feature_pt,
-        'vocab_json': args.vocab_json,
-        'batch_size': 1 if args.mode=='vis' else 256,
-        'edge_class': model_kwargs.get('edge_class', 'rule'),
-        'shuffle': False,
-    }
-    val_loader = ClevrDataLoader(**val_loader_kwargs)
 
-    model_kwargs.update({'vocab': val_loader.vocab})
+    if args.mode in {'vis', 'val'}:
+        val_loader_kwargs = {
+            'question_pt': args.val_question_pt,
+            'feature_pt': args.val_feature_pt,
+            'vocab_json': args.vocab_json,
+            'batch_size': 1 if args.mode=='vis' else 256,
+            'edge_class': model_kwargs.get('edge_class', 'rule'),
+            'shuffle': False,
+        }
+        val_loader = ClevrDataLoader(**val_loader_kwargs)
+        model_kwargs.update({'vocab': val_loader.vocab})
+    elif args.mode == 'test':
+        test_loader_kwargs = {
+            'question_pt': args.test_question_pt,
+            'feature_pt': args.test_feature_pt,
+            'vocab_json': args.vocab_json,
+            'batch_size': 256,
+            'edge_class': model_kwargs.get('edge_class', 'rule'),
+            'shuffle': False,
+        }
+        test_loader = ClevrDataLoader(**test_loader_kwargs)
+        model_kwargs.update({'vocab': test_loader.vocab})
+
     model = XNMNet(**model_kwargs).to(device)
     model.load_state_dict(loaded['state_dict'])
     num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -211,4 +273,10 @@ if __name__ == '__main__':
             val_acc, val_details = validate_with_david_generated_program(model, val_loader, device, args.pretrained_dir)
         print("Validate acc: %.4f" % val_acc)
         print(json.dumps(val_details, indent=2))
+    elif args.mode == 'test':
+        assert args.output_file, 'output_file must be given in test mode'
+        print('test with david predicted program')
+        results = test_with_david_generated_program(model, test_loader, device, args.pretrained_dir)
+        with open(args.output_file, 'w') as f:
+            json.dump(results, f)
 
