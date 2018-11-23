@@ -123,7 +123,7 @@ def main():
     parser = argparse.ArgumentParser()
     # input and output
     parser.add_argument('--save_dir', type=str, required=True, help='path to save checkpoints and logs')
-    parser.add_argument('--input_dir', default='/data/sjx/VQA-Exp/data')
+    parser.add_argument('--input_dir', required=True)
     parser.add_argument('--train_question_pt', default='train_questions.pt')
     parser.add_argument('--val_question_pt', default='val_questions.pt')
     parser.add_argument('--vocab_json', default='vocab.json')

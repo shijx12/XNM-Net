@@ -110,6 +110,9 @@ class XNMNet(nn.Module):
         stack_ptr = torch.zeros(batch_size, self.stack_len).to(self.device)
         stack_ptr[:, 0] = 1
         mem = torch.zeros(batch_size, self.glimpses * self.dim_vision).to(self.device)
+        ## cache for visualization
+        cache_module_prob = []
+        cache_att = []
 
         for t in range(self.T_ctrl):
             c_i = c_list[t] #(batch_size, dim_hidden)
@@ -135,11 +138,22 @@ class XNMNet(nn.Module):
             stack_ptr_avg = modules._sharpen_ptr(stack_ptr_avg, hard=False)
             mem_avg = torch.sum(module_prob.view(self.num_module,batch_size,1) * torch.stack([r[2] for r in res]), dim=0)
             att_stack, stack_ptr, mem = att_stack_avg, stack_ptr_avg, mem_avg
+            # cache for visualization
+            cache_module_prob.append(module_prob)
+            atts = []
+            for r in res:
+                att = modules._read_from_stack(r[0], r[1]) # (batch_size, att_dim, glimpse)
+                atts.append(att)
+            cache_att.append(atts)
+            
             
         ## Part 1. features from scene graph module network. (batch, dim_v)
         ## Part 2. question prior. (batch, dim_hidden)
         predicted_logits = self.classifier(mem, questions_hidden)
         others = {
+            'module_prob': cache_module_prob, # (T, num_module, batch_size)
+            'att': cache_att, # (T, num_module, batch_size, att_dim, glimpse)
+            'cv': cv_list, # (T, batch_size, len)
         }
         return predicted_logits, others
 
