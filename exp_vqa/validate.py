@@ -77,7 +77,7 @@ if __name__ == '__main__':
     parser.add_argument('--mode', default='val', choices=['val', 'test'])
     # input
     parser.add_argument('--ckpt', required=True)
-    parser.add_argument('--input_dir', default='/data/sjx/VQA-Exp/data')
+    parser.add_argument('--input_dir', required=True)
     parser.add_argument('--val_question_pt', default='val_questions.pt')
     parser.add_argument('--test_question_pt', default='test_questions.pt')
     parser.add_argument('--vocab_json', default='vocab.json')

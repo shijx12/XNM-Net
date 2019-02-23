@@ -1,5 +1,7 @@
 
-# pipeline to preprocess data
+# XNM experiments on VQA2.0
+
+### Pipeline to preprocess data
 
 1. preprocess VQA2.0 train questions and obtain two output files: train_questions.pt and vocab.json.
 ```
@@ -29,7 +31,7 @@ Before training, make sure your have following files in the same folder:
 - val_questions.pt (optional)
 
 
-# Training
+### Train
 ```
 python train.py --input_dir /your/path/containing/preprocessed/files --save_dir /path/for/checkpoint --val
 ```

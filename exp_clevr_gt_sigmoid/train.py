@@ -7,7 +7,6 @@ import numpy as np
 import argparse
 import time
 import os
-import shutil
 import copy
 from IPython import embed
 
@@ -46,7 +45,7 @@ def train(args):
     logging.info("Create model.........")
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model_kwargs = { k:v for k,v in vars(args).items() if k in {
-        'dim_v', 'dim_pre_v', 'num_edge_cat', 'num_class', 'num_attribute',
+        'dim_v', 'num_class',
         } }
     model_kwargs_tosave = copy.deepcopy(model_kwargs) 
     model_kwargs['vocab'] = train_loader.vocab
@@ -66,7 +65,7 @@ def train(args):
             answers, questions, *batch_input = \
                     [todevice(x, device) for x in batch]
 
-            logits, others = model(*batch_input)
+            logits = model(*batch_input)
             loss = criterion(logits, answers)
             optimizer.zero_grad()
             loss.backward()
@@ -98,8 +97,8 @@ def save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, filename):
 def main():
     parser = argparse.ArgumentParser()
     # input and output
-    parser.add_argument('--save_dir', type=str, required=True, help='path to save checkpoints and logs')
-    parser.add_argument('--input_dir', default='/data1/jiaxin/exp/CLEVR/data/')
+    parser.add_argument('--save_dir', required=True, help='path to save checkpoints and logs')
+    parser.add_argument('--input_dir', required=True)
     parser.add_argument('--train_question_pt', default='train_questions.pt')
     parser.add_argument('--train_scene_pt', default='train_scenes.pt')
     parser.add_argument('--val_question_pt', default='val_questions.pt')
@@ -108,21 +107,16 @@ def main():
     # training parameters
     parser.add_argument('--lr', default=0.001, type=float)
     parser.add_argument('--l2reg', default=0, type=float)
-    parser.add_argument('--num_epoch', default=5, type=int)
+    parser.add_argument('--num_epoch', default=10, type=int)
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--ratio', default=1, type=float, help='ratio of training examples')
     # model hyperparameters
-    parser.add_argument('--dim_pre_v', default=15, type=int)
     parser.add_argument('--dim_v', default=128, type=int)
     parser.add_argument('--num_class', default=28, type=int)
-    parser.add_argument('--num_edge_cat', default=9, type=int)
-    parser.add_argument('--num_attribute', default=15, type=int)
     args = parser.parse_args()
 
     # make logging.info display into both shell and file
-    if os.path.exists(args.save_dir):
-        shutil.rmtree(args.save_dir)
     os.mkdir(args.save_dir)
     fileHandler = logging.FileHandler(os.path.join(args.save_dir, 'stdout.log'))
     fileHandler.setFormatter(logFormatter)

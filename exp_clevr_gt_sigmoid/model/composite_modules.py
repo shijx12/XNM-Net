@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .basic_modules import *
 
+
 class AttentionModule(nn.Module):
     """ 
     Corresponding CLEVR programs: 'filter_<att>'
@@ -10,7 +11,6 @@ class AttentionModule(nn.Module):
     """
     def __init__(self, **kwargs):
         super().__init__()
-        self.dim_v = kwargs['dim_v']
         self.attendNode = AttendNodeModule()
         self.attnAnd = AndModule()
 
@@ -19,7 +19,7 @@ class AttentionModule(nn.Module):
         Args:
             attn [Tensor] (num_node, ) : attention weight produced by previous module
             feat [Tensor] (num_node, dim_v) : node features
-            query [Tensor] (dim_v, ) : embedding of <att>, such as 'red'
+            query [Tensor] (dim_v, ) : embedding of <att>, such as 'red', 'large', and etc
         """
         new_attn = self.attendNode(feat, query)
         out = self.attnAnd(attn, new_attn)
@@ -30,10 +30,9 @@ class SameModule(nn.Module):
     """
     Corresponding CLEVR programs: 'same_<cat>' 
     Output: attention
-    """
+    """    
     def __init__(self, **kwargs):
         super().__init__()
-        dim_v = kwargs['dim_v']
         self.query = QueryModule(**kwargs)
         self.attend = AttentionModule(**kwargs)
         self.attnNot = NotModule()
@@ -60,14 +59,13 @@ class ExistOrCountModule(nn.Module):
     """
     def __init__(self, **kwargs):
         super().__init__()
-        dim_v = kwargs['dim_v']
         self.projection = nn.Sequential(
                 nn.Linear(1, 128),
                 nn.ReLU(),
-                nn.Linear(128, dim_v)
+                nn.Linear(128, kwargs['dim_v'])
                 )
 
-    def forward(self, attn, feat, query):
+    def forward(self, attn):
         # sum up the node attention
         out = self.projection(torch.sum(attn, dim=0, keepdim=True)) 
         return out
@@ -92,8 +90,8 @@ class RelateModule(nn.Module):
             query [Tensor] (dim_v, ), embedding of <cat>, specifying a relationship category, such as 'left'
             edge_feat [Tensor] (num_node, num_node, dim_v) : edge features
         """
-        edge_attn = self.attendEdge(edge_feat, query)
-        out = self.transfer(attn, edge_attn)
+        weit_matrix = self.attendEdge(edge_feat, query)
+        out = self.transfer(attn, weit_matrix)
         return out
 
 
@@ -105,12 +103,11 @@ class QueryModule(nn.Module):
     def __init__(self, **kwargs):
         super().__init__()
         dim_v = kwargs['dim_v']
-        K = kwargs['k_attr']  # given attribute category number
+        K = 4  # given attribute category number
         self.query_to_weight = nn.Sequential(
             nn.Linear(dim_v, K),
             nn.Softmax(dim=0),
                 )
-        # K different mappings to project node features into different aspects
         self.mappings = nn.Parameter(torch.zeros((K, dim_v, dim_v)))
         nn.init.normal_(self.mappings.data, mean=0, std=0.01)
 
@@ -126,7 +123,7 @@ class QueryModule(nn.Module):
         weight = self.query_to_weight(query)
         mapping = torch.sum(self.mappings * weight.view(-1,1,1), dim=0) # (dim_v, dim_v)
         out = torch.matmul(mapping, out)
-        return out
+        return out # (dim_v, )
 
 
 class ComparisonModule(nn.Module):

@@ -66,13 +66,6 @@ def get_graph_matrix(edge_wtoi, objects, relations):
         rel_count[(a, b)] += 1
     return conn_M, edge_M
 
-def get_onehot_attributes_object(obj):
-    res = []
-    att_values = [obj[field] for field in att_fields] # all attribute values of current object
-    res = [int(att in att_values) for att in att_nodes] # one-hot vector
-    res = np.asarray(res)
-    return res
-
 def get_onehot_attributes_objects(objects):
     # NOTE: assign zero vector to object nodes, so they make no contributions to the prediction
     object_nodes_onehot = np.zeros((len(objects), len(att_nodes)))
@@ -114,14 +107,13 @@ def main():
     vocab = {
         'edge_token_to_idx': edge_wtoi,
     }
-    if args.vocab_json:
-        if os.path.exists(args.vocab_json):
-            old_vocab = json.load(open(args.vocab_json))
-            vocab.update(old_vocab)
-            print("Update existed vocab")
-        print("Write vocab to %s" % args.vocab_json)
-        with open(args.vocab_json, 'w') as f:
-            json.dump(vocab, f, indent=4)
+    if not os.path.exists(args.vocab_json):
+        raise Exception("must give vocab.json produced by questions")
+    old_vocab = json.load(open(args.vocab_json))
+    vocab.update(old_vocab)
+    print("Update existed vocab")
+    with open(args.vocab_json, 'w') as f:
+        json.dump(vocab, f, indent=4)
 
     print('Construct')
     conn_matrixes = {} 

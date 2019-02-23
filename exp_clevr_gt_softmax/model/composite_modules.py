@@ -6,14 +6,13 @@ from .basic_modules import *
 
 class AttentionModule(nn.Module):
     """ 
-    1 unified instance: 'filter_<cat>'
-    value_inputs: attribute values such as 'green', 'large', etc. 
-    output: attention
+    Corresponding CLEVR programs: 'filter_<att>'
+    Output: attention
     """
     def __init__(self):
         super().__init__()
         self.attendNode = AttendNodeModule()
-        self.transConn = TransConnectModule()
+        self.transConn = TransferModule()
         self.attnAnd = AndModule()
 
     def forward(self, attn, conn_matrix, feat, query):
@@ -23,8 +22,6 @@ class AttentionModule(nn.Module):
             conn_matrix [Tensor] (num_node, num_node)
             feat [Tensor] (num_node, dim_v)
             query [Tensor] (dim_v, )
-        Returns:
-            attention
         """
         attribute_attn = self.attendNode(feat, query)
         new_object_attn = self.transConn(attribute_attn, conn_matrix)
@@ -34,15 +31,13 @@ class AttentionModule(nn.Module):
 
 class SameModule(nn.Module):
     """
-    1 unified instance: 'same_<cat>'. 
-    value_inputs: <cat> including 'color','shape','material' and 'size'
-    output: attention
+    Corresponding CLEVR programs: 'same_<cat>' 
+    Output: attention
     """
-
     def __init__(self):
         super().__init__()
         self.relate = RelateModule()
-        self.transConn = TransConnectModule()
+        self.transConn = TransferModule()
         self.attnAnd = AndModule()
         self.attnNot = NotModule()
         
@@ -57,9 +52,8 @@ class SameModule(nn.Module):
 
 class ExistOrCountModule(nn.Module):
     """
-    2 instance: 'exist', 'count'
-    input: attention
-    output: encoding
+    Corresponding CLEVR programs: 'exist', 'count'
+    Output: encoding
     """
     def __init__(self, dim_v):
         super().__init__()
@@ -77,15 +71,13 @@ class ExistOrCountModule(nn.Module):
 
 class RelateModule(nn.Module):
     """
-    3 instances: 'relate_<cat>', 'query_<cat>' contained in QueryModule, 
-            and 'same_<cat>' contained in SameModule
-    value_inputs: <cat>
-    output: attention
+    Corresponding CLEVR programs: 'relate_<cat>'. Besides, it is also used inside QueryModule and SameModule
+    Output: attention
     """
     def __init__(self):
         super().__init__()
         self.attendEdge = AttendEdgeModule()
-        self.transWeit = TransWeightModule()
+        self.transfer = TransferModule()
 
     def forward(self, attn, cat_matrix, edge_cat_vectors, query, feat):
         """
@@ -94,18 +86,16 @@ class RelateModule(nn.Module):
             cat_matrix [Tensor] (num_node, num_node)
             edge_cat_vectors [Tensor] (num_edge_cat, dim_v)
             query [Tensor] (dim_v, )
-        Returns:
-            new attention
         """
         weit_matrix = self.attendEdge(edge_cat_vectors, query, cat_matrix)
-        out = self.transWeit(attn, weit_matrix)
+        out = self.transfer(attn, weit_matrix)
         return out
 
 
 class QueryModule(nn.Module):
     """
-    1 unified instance: 'query_<cat>'
-    output: encoding
+    Corresponding CLEVR programs: 'query_<cat>'
+    Output: encoding
     """
     def __init__(self):
         super().__init__()
@@ -119,16 +109,15 @@ class QueryModule(nn.Module):
 
 class ComparisonModule(nn.Module):
     """
-    4 different instances: 'equal_<cat>', 'equal_integer', 'greater_than' and 'less_than'
-    inputs: two encodings from two QueryModule or two CountModule
-    output: encoding
+    Corresponding CLEVR programs: 'equal_<cat>', 'equal_integer', 'greater_than' and 'less_than'
+    Output: encoding
     """
     def __init__(self, dim_v):
         super().__init__()
         self.projection = nn.Sequential(
-                nn.Linear(dim_v, 256),
+                nn.Linear(dim_v, 128),
                 nn.ReLU(),
-                nn.Linear(256, dim_v)
+                nn.Linear(128, dim_v)
             )
 
     def forward(self, enc1, enc2):

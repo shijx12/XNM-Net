@@ -5,7 +5,11 @@ import torch.optim as optim
 import torch.nn as nn
 import numpy as np
 import argparse
+import time
+import os
+import shutil
 import copy
+from IPython import embed
 
 from DataLoader import ClevrDataLoader
 from model.net import XNMNet
@@ -18,23 +22,22 @@ logFormatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
 rootLogger = logging.getLogger()
 
 
-
 def train(args):
     logging.info("Create train_loader and val_loader.........")
     train_loader_kwargs = {
         'question_pt': args.train_question_pt,
-        'feature_pt': args.train_feature_pt,
+        'scene_pt': args.train_scene_pt,
         'vocab_json': args.vocab_json,
         'batch_size': args.batch_size,
         'ratio': args.ratio,
-        'shuffle': True,
+        'shuffle': True
     }
     val_loader_kwargs = {
         'question_pt': args.val_question_pt,
-        'feature_pt': args.val_feature_pt,
+        'scene_pt': args.val_scene_pt,
         'vocab_json': args.vocab_json,
         'batch_size': args.batch_size,
-        'shuffle': False,
+        'shuffle': False
     }
     
     train_loader = ClevrDataLoader(**train_loader_kwargs)
@@ -43,7 +46,7 @@ def train(args):
     logging.info("Create model.........")
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model_kwargs = { k:v for k,v in vars(args).items() if k in {
-        'dim_v', 'dim_edge', 'dim_feature', 'k_attr', 'num_class',
+        'dim_v', 'dim_pre_v', 'num_edge_cat', 'num_class', 'num_attribute',
         } }
     model_kwargs_tosave = copy.deepcopy(model_kwargs) 
     model_kwargs['vocab'] = train_loader.vocab
@@ -54,12 +57,15 @@ def train(args):
     scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=[int(1/args.ratio)], gamma=0.1)
     criterion = nn.CrossEntropyLoss().to(device)
     logging.info("Start training........")
+    tic = time.time()
+    iter_count = 0
     for epoch in range(args.num_epoch):
-        model.train()
-        scheduler.step()
-        for i, batch in enumerate(train_loader):
+        for i, batch in enumerate(train_loader.generator()):
+            iter_count += 1
             progress = epoch+i/len(train_loader)
-            answers, questions, *batch_input = [todevice(x, device) for x in batch]
+            answers, questions, *batch_input = \
+                    [todevice(x, device) for x in batch]
+
             logits = model(*batch_input)
             loss = criterion(logits, answers)
             optimizer.zero_grad()
@@ -68,12 +74,14 @@ def train(args):
 
             if (i+1) % (len(train_loader) // 10) == 0:
                 logging.info("Progress %.3f  loss = %.3f" % (progress, loss.item()))
+        scheduler.step()
         if (epoch+1) % 1 == 0:
             valid_acc = validate(model, val_loader, device)
-            logging.info('\n ~~~~~~ Valid Accuracy: %.3f ~~~~~~~\n' % valid_acc)
+            logging.info('\n ~~~~~~ Valid Accuracy: %.4f ~~~~~~~\n' % valid_acc)
 
             save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, os.path.join(args.save_dir, 'model.pt')) 
             logging.info(' >>>>>> save to %s <<<<<<' % (args.save_dir))
+
 
 
 def save_checkpoint(epoch, model, optimizer, model_kwargs_tosave, filename):
@@ -93,9 +101,9 @@ def main():
     parser.add_argument('--save_dir', type=str, required=True, help='path to save checkpoints and logs')
     parser.add_argument('--input_dir', required=True)
     parser.add_argument('--train_question_pt', default='train_questions.pt')
-    parser.add_argument('--train_feature_pt', default='train_features.pt')
+    parser.add_argument('--train_scene_pt', default='train_scenes.pt')
     parser.add_argument('--val_question_pt', default='val_questions.pt')
-    parser.add_argument('--val_feature_pt', default='val_features.pt')
+    parser.add_argument('--val_scene_pt', default='val_scenes.pt')
     parser.add_argument('--vocab_json', default='vocab.json')
     # training parameters
     parser.add_argument('--lr', default=0.001, type=float)
@@ -105,11 +113,11 @@ def main():
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--ratio', default=1, type=float, help='ratio of training examples')
     # model hyperparameters
-    parser.add_argument('--dim_v', default=128, type=int)
-    parser.add_argument('--dim_feature', default=512, type=int)
-    parser.add_argument('--dim_edge', default=2, type=int)
-    parser.add_argument('--k_attr', default=4, type=int)
+    parser.add_argument('--dim_pre_v', default=15, type=int, help='dimension of one-hot node representation')
+    parser.add_argument('--dim_v', default=128, type=int, help='hidden dimension')
     parser.add_argument('--num_class', default=28, type=int)
+    parser.add_argument('--num_edge_cat', default=9, type=int, help='number of relationship categories')
+    parser.add_argument('--num_attribute', default=15, type=int, help='number of attribute values')
     args = parser.parse_args()
 
     # make logging.info display into both shell and file
@@ -122,10 +130,10 @@ def main():
         logging.info(k+':'+str(v))
     # concat obsolute path of input files
     args.train_question_pt = os.path.join(args.input_dir, args.train_question_pt)
-    args.train_feature_pt = os.path.join(args.input_dir, args.train_feature_pt)
+    args.train_scene_pt = os.path.join(args.input_dir, args.train_scene_pt)
     args.vocab_json = os.path.join(args.input_dir, args.vocab_json)
     args.val_question_pt = os.path.join(args.input_dir, args.val_question_pt)
-    args.val_feature_pt = os.path.join(args.input_dir, args.val_feature_pt)
+    args.val_scene_pt = os.path.join(args.input_dir, args.val_scene_pt)
     # set random seed
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)

@@ -4,55 +4,38 @@ import torch.nn.functional as F
 import numpy as np
 
 class AndModule(nn.Module):
-    """
-    1 unified instance: 'intersect'
-    inputs: two node attentions
-    output: attention
-    """
     def forward(self, attn1, attn2):
         out = torch.min(attn1, attn2)
         return out
 
 
 class OrModule(nn.Module):
-    """ A neural module that (basically) performs a logical or on two node attention weights.
-    """
     def forward(self, attn1, attn2):
         out = torch.max(attn1, attn2)
         return out
 
 
 class NotModule(nn.Module):
-    """ A neural module that (basically) performs a logical not on a node attention weight
-    """
     def forward(self, attn):
         out = 1.0 - attn
         return out
 
 
 class AttendNodeModule(nn.Module):
-    """ A neural module that (basically) attends graph nodes based on a query.
-
-    """
     def forward(self, node_vectors, query):
         """
         Args:
-            node_vectors [Tensor] (num_node, dim_v)
-            query [Tensor] (dim_v, )
+            node_vectors [Tensor] (num_node, dim_v) : node feature vectors
+            query [Tensor] (dim_v, ) : query vector
         Returns:
-            attn [Tensor] (num_node, ): node attentions by a softmax layer
+            attn [Tensor] (num_node, ): node attention by *SOFTMAX*. Actually it is attribute value attention, because we regard attribute values as nodes
         """
-        assert node_vectors.size(1) == query.size(0)
         logit = torch.matmul(node_vectors, query)
         attn = F.softmax(logit, dim=0)
-
         return attn
 
 
 class AttendEdgeModule(nn.Module):
-    """ A neural module that (basically) attends graph edge based on a query.
-
-    """
     def forward(self, edge_cat_vectors, query, cat_matrix):
         """
         Args:
@@ -74,38 +57,19 @@ class AttendEdgeModule(nn.Module):
         cat_attn = cat_attn.view(-1, 1, 1).expand(-1, num_node, num_rel) # (num_edge_cat, num_node, num_rel)
         attn = torch.gather(cat_attn, dim=0, index=cat_matrix) # (num_node, num_node, num_rel)
         attn = torch.sum(attn, dim=2) # (num_node, num_node)
-
         return attn
 
 
-class TransConnectModule(nn.Module):
-    """ A neural module that transforms the node attention vector according to a connectivity matrix
-
-    """
-    def forward(self, node_attn, conn_matrix):
+class TransferModule(nn.Module):
+    def forward(self, node_attn, edge_attn):
         """
+        Transfer node attention along with activated edges (transfer between different objects) or adjacent matrix (transfer from attribute value nodes to object nodes)
         Args:
             node_attn [Tensor] (num_node, )
-            conn_matrix [Tensor] (num_node, num_node) : Connectivity adjacent matrix, whose [i][j]==1 iff. there is an edge between node i and j.
+            edge_attn [Tensor] (num_node, num_node) : Weighted adjacent matrix produced by edge attention
         Returns:
             new_attn [Tensor] (num_node, )
         """
-        new_attn = torch.matmul(node_attn, conn_matrix.float())
-        return new_attn
-
-
-class TransWeightModule(nn.Module):
-    """ A neural module that transforms the node attention vector according to a weighted adjacent matrix, which is obtained by edge attention
-
-    """
-    def forward(self, node_attn, weit_matrix):
-        """
-        Args:
-            node_attn [Tensor] (num_node, )
-            weit_matrix [Tensor] (num_node, num_node) : Weighted adjacent matrix produced by edge attention.
-        Returns:
-            new_attn [Tensor] (num_node, )
-        """
-        new_attn = torch.matmul(node_attn, weit_matrix)
+        new_attn = torch.matmul(node_attn, edge_attn.float())
         return new_attn
 

@@ -6,7 +6,6 @@ import torch.nn as nn
 import numpy as np
 import argparse
 import time
-import shutil
 from IPython import embed
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s')
@@ -154,8 +153,6 @@ def main():
 
     # make logging.info display into both shell and file
     if not args.restore:
-        if os.path.exists(args.save_dir):
-            shutil.rmtree(args.save_dir)
         os.mkdir(args.save_dir)
     else:
         assert os.path.isdir(args.save_dir)

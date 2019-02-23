@@ -14,24 +14,27 @@ class XNMNet(nn.Module):
         
         # The classifier takes the output of the last module
         # and produces a distribution over answers
+        #self.classifier = nn.Sequential(
+        #    nn.Linear(self.dim_v, 256),
+        #    nn.ReLU(),
+        #    nn.Linear(256, self.num_class)
+        #    )
         self.classifier = nn.Sequential(
-            nn.Linear(self.dim_v, 256),
-            nn.ReLU(),
-            nn.Linear(256, self.num_class)
+                nn.Linear(self.dim_v, 256),
+                nn.ReLU(),
+                nn.Linear(256, self.num_class)
             )
 
+        # embeddings of relationship categories (e.g., left, right) and attribute categories (e.g., color, size)
         self.edge_cat_vectors = nn.Parameter(torch.Tensor(self.num_edge_cat, self.dim_v))
         nn.init.normal_(self.edge_cat_vectors.data, mean=0, std=1/math.sqrt(self.dim_v))
 
-        # encode program_input, which must be included in question tokens
+        # program_input must be included in question tokens
         self.word_embedding = nn.Embedding(len(self.vocab['question_token_to_idx']), self.dim_v)
         nn.init.normal_(self.word_embedding.weight, mean=0, std=1/math.sqrt(self.dim_v))
 
         # map onehot node representation to feature vectors of dim_v
-        self.map_pre_to_v = nn.Sequential(
-            nn.Linear(self.dim_pre_v, self.dim_v),
-            nn.ReLU()
-            )
+        self.map_pre_to_v = nn.Linear(self.dim_pre_v, self.dim_v)
 
         self.function_modules = {}  # holds our modules
         # go through the vocab and add all the modules to our model
@@ -80,11 +83,11 @@ class XNMNet(nn.Module):
     def forward(self, programs, program_inputs, conn_matrixes, cat_matrixes, pre_v):
         """
         Args:
-            conn_matrixes [list of Tensor]
-            cat_matrixes [list of Tensor]
-            pre_v [list of Tensor] (batch_size, num_node, dim_pre_v) : pre representation of each graph
             programs [list of Tensor]
             program_inputs [list of Tensor]
+            conn_matrixes [list of Tensor] (batch_size, (num_node, num_node))
+            cat_matrixes [list of Tensor] (batch_size, (num_node, num_node, max_rel))
+            pre_v [list of Tensor] (batch_size, (num_node, dim_pre_v)) : one-hot representation of nodes
         """
         batch_size = len(pre_v)
         device = programs[0].device
@@ -134,9 +137,7 @@ class XNMNet(nn.Module):
             
         final_module_outputs = torch.stack(final_module_outputs)
         logits = self.classifier(final_module_outputs)
-        others = {
-                }
-        return logits, others
+        return logits
 
 
     def forward_and_return_intermediates(self, programs, program_inputs, conn_matrixes, cat_matrixes, pre_v):

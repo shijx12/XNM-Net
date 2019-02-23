@@ -127,6 +127,7 @@ def main(args):
   # value_inputs, encoded by question_token_to_idx in CLEVR
   # because all valid inputs are in question vocab
   program_inputs_encoded = [] 
+  question_families = []
   orig_idxs = []
   image_idxs = []
   answers = []
@@ -135,6 +136,8 @@ def main(args):
 
     orig_idxs.append(orig_idx)
     image_idxs.append(q['image_index'])
+    if 'question_family_index' in q:
+      question_families.append(q['question_family_index'])
     question_tokens = tokenize(question,
                         punct_to_keep=[';', ','],
                         punct_to_remove=['?', '.'])
@@ -154,14 +157,9 @@ def main(args):
       input_encoded = encode(input_tokens, vocab['question_token_to_idx'])
       assert len(input_encoded) == len(program_encoded) # input should have the same len with func
       program_inputs_encoded.append(input_encoded)
-    else:
-     programs_encoded.append([-1])
-     program_inputs_encoded.append([-1])
 
     if 'answer' in q:
       answers.append(vocab['answer_token_to_idx'][q['answer']])
-    else:
-      answers.append(-1)
 
   # Pad encoded questions and programs
   max_question_length = max(len(x) for x in questions_encoded)
@@ -191,6 +189,7 @@ def main(args):
           'orig_idxs': np.asarray(orig_idxs),
           'programs': programs_encoded,
           'program_inputs': program_inputs_encoded,
+          'question_families': question_families,
           'answers': answers,
           }
   with open(args.output_pt_file, 'wb') as f:
