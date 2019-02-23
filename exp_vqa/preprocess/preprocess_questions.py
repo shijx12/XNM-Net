@@ -170,9 +170,9 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--answer_top', default=3000, type=int)
-    parser.add_argument('--glove_pt', default='/data/sjx/glove.840B.300d.py36.pt', help='glove pickle file')
+    parser.add_argument('--glove_pt', help='glove pickle file, should be a map whose key are words and value are word vectors represented by numpy arrays. Only needed in train mode')
     parser.add_argument('--input_questions_json', required=True)
-    parser.add_argument('--input_annotations_json')
+    parser.add_argument('--input_annotations_json', help='not need for test mode')
     parser.add_argument('--output_pt', required=True)
     parser.add_argument('--vocab_json', required=True)
     parser.add_argument('--mode', choices=['train', 'val', 'test'])

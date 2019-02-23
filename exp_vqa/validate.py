@@ -81,7 +81,8 @@ if __name__ == '__main__':
     parser.add_argument('--val_question_pt', default='val_questions.pt')
     parser.add_argument('--test_question_pt', default='test_questions.pt')
     parser.add_argument('--vocab_json', default='vocab.json')
-    parser.add_argument('--feature_h5', default='trainval_feature.h5')
+    parser.add_argument('--val_feature_h5', default='trainval_feature.h5')
+    parser.add_argument('--test_feature_h5', default='test_feature.h5')
     parser.add_argument('--output_file', help='used only in test mode')
     parser.add_argument('--test_question_json', help='path to v2_OpenEnded_mscoco_test2015_questions.json, used only in test mode')
     args = parser.parse_args()
@@ -89,7 +90,8 @@ if __name__ == '__main__':
     args.vocab_json = os.path.join(args.input_dir, args.vocab_json)
     args.val_question_pt = os.path.join(args.input_dir, args.val_question_pt)
     args.test_question_pt = os.path.join(args.input_dir, args.test_question_pt)
-    args.feature_h5 = os.path.join(args.input_dir, args.feature_h5)
+    args.val_feature_h5 = os.path.join(args.input_dir, args.val_feature_h5)
+    args.test_feature_h5 = os.path.join(args.input_dir, args.test_feature_h5)
     
     device = 'cuda'
     loaded = torch.load(args.ckpt, map_location={'cuda:0': 'cpu'})
@@ -98,7 +100,7 @@ if __name__ == '__main__':
         val_loader_kwargs = {
             'question_pt': args.val_question_pt,
             'vocab_json': args.vocab_json,
-            'feature_h5': args.feature_h5,
+            'feature_h5': args.val_feature_h5,
             'batch_size': 128,
             'spatial': model_kwargs['spatial'],
             'num_workers': 2,
@@ -115,7 +117,7 @@ if __name__ == '__main__':
         test_loader_kwargs = {
             'question_pt': args.test_question_pt,
             'vocab_json': args.vocab_json,
-            'feature_h5': args.feature_h5,
+            'feature_h5': args.test_feature_h5,
             'batch_size': 128,
             'spatial': model_kwargs['spatial'],
             'num_workers': 2,

@@ -38,4 +38,5 @@ Feel free to contact me if you have any problems: shijx12@gmail.com
 ### Acknowledgement
 - We refer to the repo [clevr-iep](https://github.com/facebookresearch/clevr-iep) for preprocessing codes.
 - Our implementations of module model and dataloader are based on [tbd-net](https://github.com/davidmascharka/tbd-nets).
+- Our stacked neural module implementation in `./exp_vqa` is based on Hu's [StackNMN](https://github.com/ronghanghu/snmn).
 

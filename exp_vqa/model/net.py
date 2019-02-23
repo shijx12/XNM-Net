@@ -6,7 +6,6 @@ from itertools import chain
 from . import composite_modules as modules
 from .questionEncoder import BiGRUEncoder
 from .controller import Controller
-from IPython import embed
 
 
 class XNMNet(nn.Module):
