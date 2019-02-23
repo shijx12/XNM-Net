@@ -68,6 +68,7 @@ class FindModule(nn.Module):
         x = self.fusion(feat, query)
         att_out = self.x_conv(self.drop(x)) # (batch_size, num_feat, glimpse)
         att_out = F.softmax(att_out, dim=1)  # (batch_size, num_feat, glimpse)
+        #att_out = torch.sigmoid(att_out)
         stack_ptr = _move_ptr_fw(stack_ptr)
         att_stack = _write_to_stack(att_stack, stack_ptr, att_out)
         return att_stack, stack_ptr, mem_in.clone().zero_()
