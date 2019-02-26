@@ -65,7 +65,7 @@ def train(args):
             answers, questions, *batch_input = \
                     [todevice(x, device) for x in batch]
 
-            logits = model(*batch_input)
+            logits, others = model(*batch_input)
             loss = criterion(logits, answers)
             optimizer.zero_grad()
             loss.backward()

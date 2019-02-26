@@ -31,9 +31,17 @@ def validate(model, data, device, detail=False):
     print('validate...')
     for batch in tqdm(data.generator(), total=len(data)):
         answers, questions, *batch_input = [todevice(x, device) for x in batch]
-        logits = model(*batch_input)
+        logits, others = model(*batch_input)
         predicts = logits.max(1)[1]
-        correct += torch.eq(predicts, answers).long().sum().item()
+        # correct += torch.eq(predicts, answers).long().sum().item()
+        count_outputs = others['count_outputs']
+        for i in range(len(count_outputs)):
+            if count_outputs[i] is None:
+                correct += int(predicts[i].item()==answers[i].item())
+            else:
+                p = int(round(count_outputs[i].item()))
+                a = int(data.vocab['answer_idx_to_token'][answers[i].item()])
+                correct += int(p==a)
         count += answers.size(0)
         if detail:
             programs = batch_input[0]
@@ -43,7 +51,13 @@ def validate(model, data, device, detail=False):
                     if program in ['<NULL>', '<START>', '<END>', '<UNK>', 'unique']:
                         continue
                     cat = map_program_to_cat[program]
-                    details[cat][0] += int(predicts[i].item()==answers[i].item())
+                    if program == 'count':
+                        p = int(round(count_outputs[i].item()))
+                        a = int(data.vocab['answer_idx_to_token'][answers[i].item()])
+                    else:
+                        p = predicts[i].item()
+                        a = answers[i].item()
+                    details[cat][0] += int(p==a)
                     details[cat][1] += 1
                     break
     acc = correct / count
@@ -90,7 +104,7 @@ def validate_with_david_generated_program(model, data, device, pretrained_dir):
         programs = torch.LongTensor(programs).to(device)
         program_inputs = torch.LongTensor(program_inputs).to(device)
 
-        logits = model(programs, program_inputs, *batch_input)
+        logits, others = model(programs, program_inputs, *batch_input)
         predicts = logits.max(1)[1]
         correct += torch.eq(predicts, answers).long().sum().item()
         count += answers.size(0)

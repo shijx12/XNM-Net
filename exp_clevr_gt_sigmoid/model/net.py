@@ -92,6 +92,7 @@ class XNMNet(nn.Module):
         device = programs[0].device
 
         final_module_outputs = []
+        count_outputs = []
         for n in range(batch_size):
             num_node = len(node_index[n])
             node_feat = self.word_embedding(node_index[n]).view(num_node, -1) # concat 4 attribute value embeddings
@@ -101,9 +102,10 @@ class XNMNet(nn.Module):
             saved_output, output = None, None
             try:
                 for i in range(-1, -len(programs[n])-1, -1):
-                    module_type = self.vocab['program_idx_to_token'][programs[n][i].item()]
-                    if module_type in {'<NULL>', '<START>', '<END>', '<UNK>', 'unique'}:
+                    module_type_ = self.vocab['program_idx_to_token'][programs[n][i].item()]
+                    if module_type_ in {'<NULL>', '<START>', '<END>', '<UNK>', 'unique'}:
                         continue  # the above are no-ops in our model
+                    module_type = module_type_
                     module_input = program_inputs[n][i] # <NULL> if no input for module
                     query = self.word_embedding(module_input) # used in node or edge attention
                     
@@ -119,6 +121,7 @@ class XNMNet(nn.Module):
                                 'equal', 'equal_integer', 'less_than', 'greater_than'}:
                         output = module(output, saved_output)  # these modules take two feature maps
                     elif module_type in {'exist', 'count'}:
+                        att_sum = output.sum()
                         output = module(output) # take as input one attention
                     elif module_type in {'query', 'same', 'filter'}:
                         output = module(output, node_feat, query)
@@ -133,10 +136,17 @@ class XNMNet(nn.Module):
                     print("Find a wrong program")
                     output = torch.zeros(self.dim_v).to(device)
             final_module_outputs.append(output)
+            if module_type == 'count': # For questions whose type is count, return the sum of node attention
+                count_outputs.append(att_sum)
+            else:
+                count_outputs.append(None)
             
         final_module_outputs = torch.stack(final_module_outputs)
         logits = self.classifier(final_module_outputs)
-        return logits
+        others = {
+                'count_outputs': count_outputs,
+                }
+        return logits, others
 
 
     def forward_and_return_intermediates(self, programs, program_inputs, edge_index, node_index):

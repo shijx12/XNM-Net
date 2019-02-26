@@ -66,7 +66,7 @@ def train(args):
             answers, questions, *batch_input = \
                     [todevice(x, device) for x in batch]
 
-            logits = model(*batch_input)
+            logits, others = model(*batch_input)
             loss = criterion(logits, answers)
             optimizer.zero_grad()
             loss.backward()
@@ -108,7 +108,7 @@ def main():
     # training parameters
     parser.add_argument('--lr', default=0.001, type=float)
     parser.add_argument('--l2reg', default=0, type=float)
-    parser.add_argument('--num_epoch', default=10, type=int)
+    parser.add_argument('--num_epoch', default=5, type=int)
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--ratio', default=1, type=float, help='ratio of training examples')
