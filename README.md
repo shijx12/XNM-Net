@@ -19,7 +19,7 @@ A visualization of our reasoning process:
     <img src="images/example.png">
 </div>
 
-
+<br>
 If you find this code useful in your research, please cite
 ``` tex
 @article{shi2018explainable,
