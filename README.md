@@ -7,12 +7,17 @@ Pytorch implementation of CVPR 2019 paper
 [Jiaxin Shi](https://shijx12.github.io), [Hanwang Zhang](http://www.ntu.edu.sg/home/hanwangzhang/#aboutme), Juanzi Li
 
 Flowchart:
-![flowchart](images/flowchart.pdf)
+
+<div align="center">
+    <img src="images/flowchart.png">
+</div>
 
 <br>
 A visualization of our reasoning process:
 
-![example](images/example.pdf)
+<div align="center">
+    <img src="images/example.png">
+</div>
 
 
 **Abstract**
