@@ -10,16 +10,14 @@ Flowchart of our model:
 
 <div align="center">
     <img src="images/flowchart.png" width="60%">
-</div>
+</div><br/>
 
-<br>
 A visualization of our reasoning process:
 
 <div align="center">
     <img src="images/example.png">
-</div>
+</div><br/>
 
-<br>
 If you find this code useful in your research, please cite
 ``` tex
 @article{shi2018explainable,
