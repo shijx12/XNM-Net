@@ -20,11 +20,11 @@ A visualization of our reasoning process:
 
 If you find this code useful in your research, please cite
 ``` tex
-@article{shi2018explainable,
-    title={Explainable and Explicit Visual Reasoning over Scene Graphs},
-    author={Shi, Jiaxin and Zhang, Hanwang and Li, Juanzi},
-    journal={arXiv preprint arXiv:1812.01855},
-    year={2018}
+@inproceedings{shi2019explainable,
+  title={Explainable and Explicit Visual Reasoning over Scene Graphs},
+  author={Jiaxin Shi, Hanwang Zhang, Juanzi Li},
+  booktitle={CVPR},
+  year={2019}
 }
 ```
 
